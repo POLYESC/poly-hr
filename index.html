@@ -2405,6 +2405,23 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
 
   // 2단계: GSheet 동기화일 때만 "시트에 없는 기존 _source:GSheet 데이터 제거"
   if(sourceTag==="GSheet"){
+    // [마이그레이션] 이전 버전(v10)에서 저장된 _source 없는 데이터를 GSheet 출처로 자동 태깅
+    // 기준: rawRecords에 있는 직원은 과거 GSheet/엑셀 업로드로 들어왔다고 간주
+    target.rawRecords.forEach(function(r){if(!r._source)r._source="GSheet";});
+    target.deptData.campuses.forEach(function(cp){
+      cp.teams.forEach(function(t){
+        (t.employees||[]).forEach(function(e){
+          if(!e._source){
+            var nameClean=parseRawName(e.name).name||e.name;
+            var hasRaw=target.rawRecords.some(function(r){return r.name===e.name||r.name===nameClean;});
+            // rawRecords에 있으면 GSheet 출처로 간주 (앞으로 시트 동기화로 삭제 가능)
+            if(hasRaw)e._source="GSheet";
+            // rawRecords에 없으면 "앱 직접 추가" → _source 비워둠 (보존)
+          }
+        });
+      });
+    });
+
     var removedNames={};
     // rawRecords 제거
     var keptRaws=[];
