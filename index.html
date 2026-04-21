@@ -244,8 +244,9 @@ body.card-dragging .emp-list{pointer-events:none}
     <div class="meta" id="headerMeta"></div>
   </div>
   <div class="hdr-right">
-    <input class="search-box" id="searchBox" placeholder="&#128269; 이름·직급·캠퍼스 검색..." oninput="onSearch()">
+    <input class="search-box" id="searchBox" placeholder="&#128269; 이름·직책·캠퍼스 검색..." oninput="onSearch()">
     <button class="hbtn" onclick="showAdvancedSearch()" title="고급 검색">&#9881; 필터</button>
+    <button class="hbtn" id="advClearBtn" style="display:none;background:rgba(244,67,54,.25)" onclick="clearAdvSearch()" title="고급검색 해제">&#10005; 필터해제</button>
     <button class="hbtn" id="undoBtn" style="display:none" onclick="doUndo()">&#8634; 취소</button>
     <button class="hbtn" onclick="exportCSV()">&#8681; CSV</button>
     <button class="hbtn" onclick="syncFromGoogleSheet()" title="구글시트 수동 동기화">&#9729; 새로고침</button>
@@ -286,7 +287,76 @@ body.card-dragging .emp-list{pointer-events:none}
 <div class="ctx-menu" id="ctxMenu"></div>
 
 <script>
-// ===== Firebase (공용 실시간 동기화) =====
+// ============================================================
+// ⚙ CONFIG — 전체 시스템 설정 (매직 넘버 통합)
+// ============================================================
+var CONFIG={
+  VERSION:"v26",
+  SCHEMA_VERSION:2,// Firebase 스키마 (1=통째, 2=분할)
+
+  // Firebase
+  FB_DEBOUNCE_MS:1000,
+  FB_ROOT:"polyhr",
+
+  // GSheet
+  GS_SYNC_THROTTLE_MS:5*60*1000,
+  GS_AUTO_LOAD_DELAY_MS:1500,
+
+  // 법정/기준
+  MIN_WAGE:10230,
+  STD_HOURS:209,
+
+  // 분석 임계값
+  ANOMALY_THRESHOLD_GRADE_PCT:30,
+  ANOMALY_THRESHOLD_FULL_PCT:10,
+  ANOMALY_MIN_GROUP_SIZE_GRADE:3,
+  ANOMALY_MIN_GROUP_SIZE_FULL:2,
+  PAY_CHANGE_SIGNIFICANT_PCT:3,
+  CAMPUS_PAY_WARN_PCT:20,
+
+  // Span of Control
+  SOC_OVERLOAD:15,
+  SOC_NORMAL:10,
+
+  // 퇴사율 위험
+  TURNOVER_HIGH_PCT:30,
+  TURNOVER_MID_PCT:15,
+
+  // 승진 후보 기준
+  PROMOTION_TENURE_YEARS:3,
+  PROMOTION_GRADE_MONTHS:24,
+
+  // 급여 분석
+  PAY_HISTOGRAM_BIN:500000,
+
+  // UI
+  MAX_PERSONAL_LIST:300,
+  MAX_ANOMALY_ROWS:40,
+  MAX_MOVE_MATRIX_ROWS:30,
+
+  // 퇴사사유 표준
+  LEAVE_REASONS:["자발적 퇴사","계약만료","권고사직","건강 사유","가정 사유","학업","은퇴","기타"]
+};
+
+// ============================================================
+// 🔑 UID 생성 — 동명이인 구분용 고유 ID
+// ============================================================
+// 주민번호 앞 6자리 + 최초입사일. 주민번호 없으면 이름 + 최초입사일
+function generateUid(rec){
+  if(!rec)return"";
+  var firstJoin=rec.firstJoin||rec.joinDate||"";
+  var firstJoinClean=String(firstJoin).replace(/[^0-9]/g,"").slice(0,8);
+  var residentClean=String(rec.resident||"").replace(/[^0-9]/g,"");
+  if(residentClean.length>=6){
+    return residentClean.slice(0,6)+"_"+firstJoinClean;
+  }
+  // 폴백 — 주민번호 없음
+  return(rec.name||"?")+"_"+firstJoinClean;
+}
+
+// ============================================================
+// Firebase 설정
+// ============================================================
 var FIREBASE_CONFIG={
   apiKey:"AIzaSyAhsLITEsnJbxSW9MmyexGS0z1Y48cLwDE",
   authDomain:"poly-hr.firebaseapp.com",
@@ -296,12 +366,12 @@ var FIREBASE_CONFIG={
   messagingSenderId:"640888444366",
   appId:"1:640888444366:web:86ec49f70db47e75f3879f"
 };
-// Firebase 상태
 var FB={app:null,db:null,ref:null,ready:false,applyingRemote:false,localDirty:false,lastPushAt:0,lastPullAt:0};
+
 // ===== 구글시트 (Apps Script Web App) 연동 설정 =====
-// Apps Script가 각 탭을 읽어 {탭이름: [[헤더],[행1],[행2],...]} 형식으로 반환함
 var GAS_URL="https://script.google.com/macros/s/AKfycbxt-JtW5ZsubUuZOelggYCRjXkLofynHxtYzLEOLl09sbvMButm3yIQSUQTwkDxV5JZ6w/exec";
 var GSHEET_VIEW_URL="https://docs.google.com/spreadsheets/d/1WEgjpozNrysiFOf2xRErRiWPBExShMdorB1PwQl65_8/edit";
+
 
 // 탭 이름 → "YYYY년 M월" 정규화
 // 허용: "2025-01", "2025-1", "202501", "2025년 1월", "2025년 01월", "2025.01", "2025/1" ...
@@ -354,7 +424,7 @@ var CAMPUS_C={
   "엠아이엘":{hd:"#212121"}
 };
 
-// 실제 직급 색상
+// 실제 직책 색상
 var GRADE_C={
   "원장":    {tx:"#880E4F"},
   "부원장":  {tx:"#C62828"},
@@ -520,6 +590,32 @@ function gubnHTML(g){
 function notify(m,t){var e=document.getElementById("notif");e.textContent=m;e.className="notif "+(t||"info");e.style.display="block";clearTimeout(e._t);e._t=setTimeout(function(){e.style.display="none";},3000);}
 function switchTab(t){state.tab=t;document.querySelectorAll("#mainTabs .tab").forEach(function(b){b.classList.toggle("on",b.dataset.tab===t);});render();}
 function onSearch(){state.search=document.getElementById("searchBox").value;render();}
+
+// 한글 IME 조합 안전 헬퍼 — 자음/모음 조합 중에는 render 스킵
+// 사용법: oninput="safeInputUpdate(this,function(v){state.xxx=v;});"
+//        onkeydown="this.dataset.composing='1'"  (선택)
+function safeInputUpdate(inputEl,setter){
+  // composition 중이면 상태 업데이트만 하고 render는 스킵
+  if(inputEl.dataset._composing==="1"){
+    setter(inputEl.value);
+    return;
+  }
+  setter(inputEl.value);
+  // input의 위치 정보 보존
+  var sel=inputEl.selectionStart;
+  var id=inputEl.id;
+  render();
+  // 리렌더 후 같은 id의 input에 포커스 복원
+  requestAnimationFrame(function(){
+    var ne=document.getElementById(id);
+    if(ne&&ne!==inputEl){ne.focus();try{ne.setSelectionRange(sel,sel);}catch(e){}}
+  });
+}
+
+// 한글 조합 이벤트 연결: oncompositionstart/end 핸들러
+// HTML에서 oncompositionstart="this.dataset._composing='1'"
+//       oncompositionend="this.dataset._composing='';safeInputUpdate(this,...)"
+
 function closeModal(){document.getElementById("modalBg").classList.remove("show");}
 
 // ===== 통계 =====
@@ -563,7 +659,7 @@ function getAllManagersAllTime(){
   Object.keys(allTl).forEach(function(name){
     var tl=allTl[name];
     var latestMgr=null;
-    // 최신 월부터 역순 탐색, 관리자 직급인 최근 레코드 선택
+    // 최신 월부터 역순 탐색, 관리자 직책인 최근 레코드 선택
     for(var i=tl.length-1;i>=0;i--){
       if(isManagerGrade(tl[i].grade)){latestMgr=tl[i];break;}
     }
@@ -588,9 +684,14 @@ function doUndo(){
   updateUndoBtn();render();notify("↩ 실행취소: "+snap.label,"ok");
 }
 function updateUndoBtn(){
-  var btn=document.getElementById("undoBtn");if(!btn)return;
-  if(_undoStack.length){btn.style.display="";btn.innerHTML="&#8634; 취소 ("+_undoStack.length+")";}
-  else btn.style.display="none";
+  var btn=document.getElementById("undoBtn");
+  if(btn){
+    if(_undoStack.length){btn.style.display="";btn.innerHTML="&#8634; 취소 ("+_undoStack.length+")";}
+    else btn.style.display="none";
+  }
+  // 고급검색 활성 시 해제 버튼 노출
+  var acb=document.getElementById("advClearBtn");
+  if(acb){acb.style.display=state.advFilter?"":"none";}
 }
 document.addEventListener("keydown",function(e){if((e.ctrlKey||e.metaKey)&&e.key==="z"&&!e.shiftKey){e.preventDefault();doUndo();}});
 
@@ -641,9 +742,14 @@ function renderTeamCard(team,campus,pos){
   var cc=CAMPUS_C[campus.name]||{hd:"#555"};
   var sel=state.selected?"sel-target":"";
   var q=state.search.trim().toLowerCase();
+  var af=state.advFilter;
   var h="",idx=0;
   (team.employees||[]).forEach(function(e){
-    if(q&&e.name.toLowerCase().indexOf(q)<0&&(e.grade||"").indexOf(q)<0&&(e.gubn||"").indexOf(q)<0)return;
+    // 고급검색이 있으면 우선 적용 (이름 q 무시)
+    if(af){
+      var eWithCtx=Object.assign({campus:campus.name,team:team.name},e);
+      if(!matchAdvFilter(eWithCtx,af))return;
+    }else if(q&&e.name.toLowerCase().indexOf(q)<0&&(e.grade||"").indexOf(q)<0&&(e.gubn||"").indexOf(q)<0)return;
     idx++;
     var isSel=state.selected&&state.selected.name===e.name&&state.selected.fromTeam===team.name;
     h+='<div class="emp-item'+(isSel?" selected":"")+'" draggable="true" data-emp="'+esc(e.name)+'" data-team="'+esc(team.name)+'" data-campus="'+esc(campus.name)+'" ondragstart="handleDragStart(event)" ondragend="handleDragEnd(event)" onclick="handleEmpClick(event)">';
@@ -684,7 +790,7 @@ function findEmployee(name,team,campus){
   var r=null;DD().campuses.forEach(function(cp){if(cp.name!==campus)return;cp.teams.forEach(function(t){if(t.name!==team)return;(t.employees||[]).forEach(function(e){if(e.name===name)r=e;});});});return r;
 }
 
-// 관리자 직급 (본부장>원장>부원장>AC>EC>KC>상담실장>유치부주임>한국인HT)
+// 관리자 직책 (본부장>원장>부원장>AC>EC>KC>상담실장>유치부주임>한국인HT)
 var MANAGER_GRADES=["본부장","원장","부원장","AC교수부장","EC교수부장","KC교수부장","상담실장","유치부주임","한국인HT"];
 function isManagerGrade(g){return MANAGER_GRADES.indexOf(g||"")>=0;}
 
@@ -711,8 +817,8 @@ function showEmployeeDetail(name,team,campus){
 
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">';
   h+='<div class="field"><label>이름</label><input id="ed_name" value="'+esc(emp.name)+'"></div>';
-  h+='<div class="field"><label>사번</label><input id="ed_empid" value="'+esc(emp.empId||"")+'"></div>';
-  h+='<div class="field"><label>직급</label><select id="ed_grade">';
+  h+='<input type="hidden" id="ed_empid" value="'+esc(emp.empId||"")+'">';
+  h+='<div class="field"><label>직책</label><select id="ed_grade">';
   Object.keys(GRADE_C).forEach(function(g){h+='<option value="'+g+'"'+(emp.grade===g?" selected":"")+'>'+g+'</option>';});
   h+='</select></div>';
   h+='<div class="field"><label>고용형태</label><select id="ed_gubn">';
@@ -817,14 +923,15 @@ function showAddEmployee(team,campus){
   var cc=CAMPUS_C[campus]||{hd:"#555"};
   var h='<h2>&#10133; 신규 직원 <span class="badge" style="background:'+cc.hd+'">'+esc(campus)+'</span></h2>';
   h+='<div style="font-size:11px;color:#888;margin:-10px 0 12px">'+esc(team)+'</div>';
-  h+='<div class="modal-row"><div class="field"><label>이름</label><input id="new_name" placeholder="홍길동 또는 John Smith"></div><div class="field"><label>사번</label><input id="new_empid" placeholder=""></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>직급</label><select id="new_grade">';
+  h+='<div class="modal-row"><div class="field"><label>이름</label><input id="new_name" placeholder="홍길동 또는 John Smith"></div><input type="hidden" id="new_empid" value=""><div class="field"><label>주민번호 앞 6자리</label><input id="new_resident" placeholder="901231" maxlength="6"></div></div>';
+  h+='<div class="modal-row"><div class="field"><label>직책</label><select id="new_grade">';
   Object.keys(GRADE_C).forEach(function(g){h+='<option value="'+g+'"'+(g==="유치부교사"?" selected":"")+'>'+g+'</option>';});
   h+='</select></div><div class="field"><label>고용형태</label><select id="new_gubn">';
   ["정규직","단기근로","사업소득","일용직"].forEach(function(g){h+='<option value="'+g+'"'+(g==="정규직"?" selected":"")+'>'+g+'</option>';});
   h+='</select></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>입사일</label><input id="new_join" placeholder="2025-01"></div><div class="field"><label>연락처</label><input id="new_phone" placeholder="010-0000-0000"></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>기본급</label><input id="new_base" type="number" placeholder="2700000"></div><div class="field"><label>차인지급액</label><input id="new_net" type="number" placeholder="2500000"></div></div>';
+  h+='<div class="modal-row"><div class="field"><label>최초입사일</label><input id="new_firstjoin" placeholder="YYYY-MM-DD"></div><div class="field"><label>연락처</label><input id="new_phone" placeholder="010-0000-0000"></div></div>';
+  h+='<div class="modal-row"><div class="field"><label>입사일 (당월)</label><input id="new_join" placeholder="2026-01"></div><div class="field"><label>기본급</label><input id="new_base" type="number" placeholder="2700000"></div></div>';
+  h+='<div class="modal-row"><div class="field"><label>차인지급액</label><input id="new_net" type="number" placeholder="2500000"></div><div class="field"></div></div>';
   h+='<div class="modal-btns"><button class="mbtn" onclick="closeModal()">취소</button><button class="mbtn pri" onclick="doAddEmployee()">추가</button></div>';
   document.getElementById("modalContent").innerHTML=h;document.getElementById("modalBg").classList.add("show");
 }
@@ -833,12 +940,31 @@ function doAddEmployee(){
   if(!_addCtx)return;
   var nm=document.getElementById("new_name").value.trim();if(!nm){notify("이름 입력","warn");return;}
   pushUndo(nm+" 추가");
-  var emp={name:nm,empId:document.getElementById("new_empid").value.trim(),grade:document.getElementById("new_grade").value,gubn:document.getElementById("new_gubn").value,joinDate:document.getElementById("new_join").value.trim(),phone:document.getElementById("new_phone").value.trim(),basePay:parseInt(document.getElementById("new_base").value)||0,food:0,carAllow:0,overTime:0,deduct:0,netPay:parseInt(document.getElementById("new_net").value)||0,_source:"manual"};
+  var resEl=document.getElementById("new_resident");
+  var firstJoinEl=document.getElementById("new_firstjoin");
+  var firstJoin=firstJoinEl?firstJoinEl.value.trim():"";
+  var resident=resEl?resEl.value.trim():"";
+  var joinDate=document.getElementById("new_join").value.trim();
+  var emp={
+    name:nm,
+    empId:document.getElementById("new_empid").value.trim(),
+    grade:document.getElementById("new_grade").value,
+    gubn:document.getElementById("new_gubn").value,
+    joinDate:joinDate,
+    firstJoin:firstJoin||joinDate,
+    resident:resident,
+    phone:document.getElementById("new_phone").value.trim(),
+    basePay:parseInt(document.getElementById("new_base").value)||0,
+    food:0,carAllow:0,overTime:0,deduct:0,
+    netPay:parseInt(document.getElementById("new_net").value)||0,
+    _source:"manual"
+  };
+  emp._uid=generateUid(emp);
   var added=false;
   DD().campuses.forEach(function(cp){if(cp.name!==_addCtx.campus||added)return;cp.teams.forEach(function(t){if(t.name!==_addCtx.team||added)return;t.employees.push(emp);added=true;});});
   addLog(nm,"신규",_addCtx.campus+"/"+_addCtx.team,"입사");
   if(!D().inoutRecords)D().inoutRecords=[];
-  D().inoutRecords.push({type:"입사",date:new Date().toISOString().slice(0,10),name:nm,campus:_addCtx.campus,team:_addCtx.team,grade:emp.grade,gubn:emp.gubn,memo:"직접 추가"});
+  D().inoutRecords.push({type:"입사",date:joinDate||new Date().toISOString().slice(0,10),name:nm,_uid:emp._uid,campus:_addCtx.campus,team:_addCtx.team,grade:emp.grade,gubn:emp.gubn,memo:"직접 추가"});
   closeModal();notify(nm+" 추가","ok");render();
 }
 
@@ -1028,42 +1154,75 @@ function getQuarter(monthKey){
 
 // ===== v20 신규 헬퍼 =====
 // 전 직원의 타임라인을 한 번에 수집 (성능 최적화)
-// 재계산은 render() 사이클마다 최대 1회
+// UID 기반 매칭으로 동명이인 분리
 var _timelineCache=null;var _timelineCacheKey=null;
+var _nameToUids=null;// name → [uid1, uid2, ...] 동명이인 감지용
 function buildAllTimelines(){
-  // MONTHS_DATA 변경 감지용 키 (월 개수 + 최신 savedAt)
   var key=Object.keys(MONTHS_DATA).length+"|"+Object.keys(MONTHS_DATA).sort().join(",");
   if(_timelineCache&&_timelineCacheKey===key)return _timelineCache;
-  var map={};// name → timeline[]
+  var map={};// uid → timeline[]
+  var nameMap={};// name → Set(uid)
   var months=Object.keys(MONTHS_DATA).sort(monthCompare);
   months.forEach(function(mk){
     var md=MONTHS_DATA[mk];if(!md||!md.deptData)return;
-    var rrByName={};(md.rawRecords||[]).forEach(function(r){if(r.name)rrByName[r.name]=r;});
+    var rrByUid={};var rrByName={};
+    (md.rawRecords||[]).forEach(function(r){
+      if(r._uid)rrByUid[r._uid]=r;
+      if(r.name)rrByName[r.name]=r;
+    });
     md.deptData.campuses.forEach(function(cp){
       cp.teams.forEach(function(t){
         (t.employees||[]).forEach(function(e){
-          if(!map[e.name])map[e.name]=[];
-          var rr=rrByName[e.name];
-          map[e.name].push({
+          // UID 확보: 직원 객체에 있으면 사용, 없으면 Raw에서 찾고, 그래도 없으면 생성
+          var uid=e._uid;
+          if(!uid){
+            var rr0=rrByName[e.name];
+            if(rr0&&rr0._uid)uid=rr0._uid;
+            else uid=generateUid({name:e.name,resident:(rr0&&rr0.resident)||"",firstJoin:(rr0&&rr0.firstJoin)||e.joinDate||""});
+          }
+          if(!map[uid])map[uid]=[];
+          var rr=rrByUid[uid]||rrByName[e.name];
+          map[uid].push({
+            uid:uid,name:e.name,
             month:mk,campus:cp.name,team:t.name,grade:e.grade||"",
             gubn:e.gubn||"",basePay:e.basePay||0,netPay:e.netPay||0,
             nationality:e.nationality||(rr&&rr.nationality)||"",
             joinDate:(rr&&rr.firstJoin)||e.joinDate||""
           });
+          // 이름→UID Set 구축
+          if(!nameMap[e.name])nameMap[e.name]={};
+          nameMap[e.name][uid]=true;
         });
       });
     });
   });
+  // name→uids[] 배열 변환
+  _nameToUids={};
+  Object.keys(nameMap).forEach(function(n){_nameToUids[n]=Object.keys(nameMap[n]);});
   _timelineCache=map;_timelineCacheKey=key;
   return map;
 }
-function invalidateTimelineCache(){_timelineCache=null;_timelineCacheKey=null;}
+function invalidateTimelineCache(){_timelineCache=null;_timelineCacheKey=null;_nameToUids=null;}
 
-// 특정 직원의 전 월 타임라인 (캐시 사용)
-function getEmployeeTimeline(name){
-  if(!name)return[];
+// 동명이인 감지: 이름으로 UID 목록 조회
+function getUidsByName(name){
+  if(!_nameToUids)buildAllTimelines();
+  return(_nameToUids&&_nameToUids[name])||[];
+}
+function hasDuplicateName(name){
+  return getUidsByName(name).length>=2;
+}
+
+// 특정 직원의 전 월 타임라인 (UID 우선, 이름 폴백)
+function getEmployeeTimeline(nameOrUid){
+  if(!nameOrUid)return[];
   var all=buildAllTimelines();
-  return all[name]||[];
+  // UID로 들어왔으면 직접 조회
+  if(all[nameOrUid])return all[nameOrUid];
+  // 이름으로 들어왔으면 해당 이름의 첫 UID (동명이인이면 호출자 주의)
+  var uids=getUidsByName(nameOrUid);
+  if(uids.length>0)return all[uids[0]]||[];
+  return[];
 }
 
 // 타임라인에서 변화 이벤트 감지
@@ -1077,7 +1236,7 @@ function detectTimelineEvents(timeline){
     if(prev.team!==cur.team&&prev.campus===cur.campus)events.push({month:cur.month,type:"팀이동",icon:"🔀",desc:prev.team+" → "+cur.team,color:"#00838F"});
     if(prev.grade!==cur.grade){
       var isPromo=gradeOrderIdx(cur.grade)<gradeOrderIdx(prev.grade);
-      events.push({month:cur.month,type:isPromo?"승진":"직급변경",icon:isPromo?"⬆️":"🔄",desc:prev.grade+" → "+cur.grade,color:isPromo?"#6A1B9A":"#757575"});
+      events.push({month:cur.month,type:isPromo?"승진":"직책변경",icon:isPromo?"⬆️":"🔄",desc:prev.grade+" → "+cur.grade,color:isPromo?"#6A1B9A":"#757575"});
     }
     if(prev.basePay&&cur.basePay){
       var diff=(cur.basePay-prev.basePay)/prev.basePay;
@@ -1313,7 +1472,7 @@ function renderOverview(){
   h+='<select id="ov_campus" style="padding:6px 14px;border:1.5px solid #1a3a5c;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;color:#1a3a5c;background:#fff;cursor:pointer" onchange="state.overviewCampus=this.value;render()">';
   campuses.forEach(function(c){h+='<option value="'+esc(c)+'"'+(c===selCp?" selected":"")+'>'+esc(c)+'</option>';});
   h+='</select>';
-  var subTabs=[["summary","👥 현황"],["payAnalysis","💰 인건비"],["trend","📈 트렌드"],["org","🏢 조직"],["risk","🚨 리스크"],["special","🌡 특수"],["salaryDetail","📋 직책별"],["compare","📄 기안서"]];
+  var subTabs=[["summary","👥 현황"],["payAnalysis","💰 인건비"],["trend","📈 트렌드"],["org","🏢 조직"],["turnover","🔚 퇴사 분석"],["salaryDetail","📋 직책별"],["compare","📄 기안서"]];
   subTabs.forEach(function(st2){h+='<button onclick="state.overviewSubTab=\''+st2[0]+'\';render()" style="padding:6px 14px;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;border:1.5px solid '+(subTab===st2[0]?"#1a3a5c":"#ddd")+';background:'+(subTab===st2[0]?"#1a3a5c":"#fff")+';color:'+(subTab===st2[0]?"#fff":"#666")+'">'+st2[1]+'</button>';});
   h+='</div>';
 
@@ -1327,8 +1486,7 @@ function renderOverview(){
   else if(subTab==="payAnalysis"){h+=renderOvCompare(emps,selCp);h+=renderOvPayAnalysis(emps,selCp);}
   else if(subTab==="trend"){h+=renderOvTrend(selCp);}
   else if(subTab==="org"){h+=renderOvOrg(emps,selCp);}
-  else if(subTab==="risk"){h+=renderOvRisk(emps,selCp);}
-  else if(subTab==="special"){h+=renderOvSpecial(emps,selCp);}
+  else if(subTab==="turnover"){h+=renderOvTurnover(emps,selCp);}
   else if(subTab==="salaryDetail"){h+=renderGradePayTab(emps,selCp,cc);}
   else{h+=renderDraftInOverview(selCp);}
   return h;
@@ -1380,7 +1538,7 @@ function renderOvSummary(emps,cp,cc,st,selCp){
   gubnSegs.forEach(function(s){h+='<div style="display:flex;align-items:center;gap:4px;font-size:9px;margin-bottom:1px"><div style="width:7px;height:7px;border-radius:50%;background:'+s.c+';flex-shrink:0"></div>'+esc(s.lbl)+' <b>'+s.v+'</b></div>';});
   h+='</div></div>';
   h+='<div>';
-  h+='<div style="font-size:10px;font-weight:700;color:#555;margin-bottom:4px">직급별 인원</div>';
+  h+='<div style="font-size:10px;font-weight:700;color:#555;margin-bottom:4px">직책별 인원</div>';
   h+=svgBar(gradeData,function(d){var gc=GRADE_C[d.lbl]||{tx:"#888"};return gc.tx;},280,100);
   h+='</div></div></div>';
 
@@ -1401,7 +1559,7 @@ function renderOvSummary(emps,cp,cc,st,selCp){
     }
     h+='</div>';
     h+='<div>';
-    h+='<div style="font-size:10px;font-weight:700;color:#555;margin-bottom:4px">직급별 인원</div>';
+    h+='<div style="font-size:10px;font-weight:700;color:#555;margin-bottom:4px">직책별 인원</div>';
     if(outGradeData.length){h+=svgBar(outGradeData,function(){return"#EF9A9A";},280,100);}
     h+='</div></div>';
     // 퇴사자 간략 목록
@@ -1435,15 +1593,41 @@ function renderOvSummary(emps,cp,cc,st,selCp){
     h+='</div>';
   }
 
-  // ===== 퇴사율 분석 =====
-  h+=renderTurnoverAnalysis(emps,outRecs,selCp);
-
-  // ===== 신규: 인력 구성 심층 (성별/국적/연령x직책/팀별 요약) =====
+  // ===== 인력 구성 심층 (성별/국적) =====
   h+=renderWorkforceComposition(emps,selCp);
 
-  // ===== 37: 여러 월 동시 비교 =====
-  h+=renderMultiMonthCompare(selCp);
+  // ===== 고용형태 분리 (특수탭에서 이동) =====
+  h+=renderGubnSplit(emps,selCp);
 
+  return h;
+}
+
+// 고용형태 분리 뷰 (현황 탭으로 이동)
+function renderGubnSplit(emps,selCp){
+  var h='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #1565C0;border-radius:10px;padding:12px 14px;margin-top:10px;margin-bottom:10px">';
+  h+='<div style="font-size:11px;font-weight:800;color:#1565C0;margin-bottom:8px">💼 고용형태별 분포</div>';
+  var gubnMap={};
+  emps.forEach(function(e){
+    var cat=getGubnCategory(e.gubn);
+    if(!gubnMap[cat])gubnMap[cat]={cnt:0,totalBase:0,totalNet:0};
+    gubnMap[cat].cnt++;gubnMap[cat].totalBase+=e.basePay||0;gubnMap[cat].totalNet+=e.netPay||0;
+  });
+  var gubnArr=Object.keys(gubnMap).map(function(k){return Object.assign({cat:k},gubnMap[k]);}).sort(function(a,b){return b.cnt-a.cnt;});
+  if(!gubnArr.length){h+='<div style="font-size:11px;color:#aaa;padding:8px">데이터 없음</div></div>';return h;}
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">';
+  gubnArr.forEach(function(g){
+    var colors={"정규직":"#1565C0","원어민":"#00838F","비정규직":"#F57F17","파트타임":"#6A1B9A","기타":"#9E9E9E"};
+    var c=colors[g.cat]||"#9E9E9E";
+    var pct=Math.round(g.cnt/emps.length*1000)/10;
+    var avgBase=g.cnt?Math.round(g.totalBase/g.cnt):0;
+    h+='<div style="background:'+c+'11;border:1px solid '+c+'55;border-left:4px solid '+c+';border-radius:8px;padding:10px 12px">';
+    h+='<div style="font-size:11px;font-weight:800;color:'+c+'">'+esc(g.cat)+'</div>';
+    h+='<div style="font-size:18px;font-weight:900;color:'+c+'">'+g.cnt+'<span style="font-size:11px">명</span> <span style="font-size:10px;color:#888;font-weight:400">('+pct+'%)</span></div>';
+    h+='<div style="font-size:10px;color:#555;margin-top:3px">평균 기본급 <b>'+fmtW(avgBase)+'</b></div>';
+    h+='<div style="font-size:10px;color:#555">총 실지급 <b>'+fmtW(g.totalNet)+'</b></div>';
+    h+='</div>';
+  });
+  h+='</div></div>';
   return h;
 }
 
@@ -1530,8 +1714,8 @@ function showAdvancedSearch(){
   });
   h+='</div></div>';
   h+='</div>';
-  // 직급
-  h+='<div class="modal-row"><div class="field"><label>직급 (복수 가능)</label><div style="display:flex;flex-wrap:wrap;gap:3px">';
+  // 직책
+  h+='<div class="modal-row"><div class="field"><label>직책 (복수 가능)</label><div style="display:flex;flex-wrap:wrap;gap:3px">';
   GRADE_ORDER.forEach(function(g){
     var on=(af.grades||[]).indexOf(g)>=0;
     h+='<span onclick="this.classList.toggle(\'on\');" data-v="'+esc(g)+'" class="af-gchip'+(on?" on":"")+'" style="padding:3px 10px;border-radius:10px;font-size:10px;cursor:pointer;border:1.5px solid '+(on?"#6A1B9A":"#ddd")+';background:'+(on?"#6A1B9A":"#fff")+';color:'+(on?"#fff":"#666")+';font-weight:700">'+esc(g)+'</span>';
@@ -1604,21 +1788,28 @@ function previewAdvSearch(){
 function applyAdvSearch(){
   var af=collectAdvFilter();
   state.advFilter=af;
+  // 일반 검색은 클리어 (고급검색만 적용)
+  state.search="";
+  document.getElementById("searchBox").value="";
   closeModal();
-  // 검색 필터 적용: search input에 요약 표시
+  render();
+  // 적용된 필터 요약
   var sumParts=[];
   if(af.name)sumParts.push("이름:"+af.name);
   if(af.campuses.length)sumParts.push(af.campuses.length+"캠퍼스");
-  if(af.grades.length)sumParts.push(af.grades.length+"직급");
+  if(af.grades.length)sumParts.push(af.grades.length+"직책");
   if(af.baseMin||af.baseMax)sumParts.push("기본급");
   if(af.tenMin||af.tenMax)sumParts.push("근속");
   if(af.nationalities.length)sumParts.push(af.nationalities.length+"국적");
   if(af.gubn)sumParts.push("고용형태");
-  var sum=sumParts.length?"필터: "+sumParts.join(", "):"";
-  document.getElementById("searchBox").value=sum;
-  state.searchQuery=sum;
+  notify("🔍 고급검색 적용 — "+(sumParts.join(" · ")||"조건 없음"),"ok");
+}
+
+// 고급검색 해제
+function clearAdvSearch(){
+  state.advFilter=null;
   render();
-  notify("고급검색 필터 적용","ok");
+  notify("고급검색 해제","info");
 }
 
 // ===== 인력 구성 심층 분석 =====
@@ -1683,7 +1874,11 @@ function renderWorkforceComposition(emps,selCp){
   }
   h+='</div></div>';
 
-  // (3) 연령대 × 직책 교차표 (Heatmap)
+  return h;
+}
+
+// 연령대 × 직책 교차표 (조직 탭에서 호출)
+function renderAgeGradeMatrix(emps,selCp){
   var ageBands=["20대","30대","40대","50대","60대+","미상"];
   var gradeOrderSorted=GRADE_ORDER.filter(function(g){return emps.some(function(e){return e.grade===g;});});
   var cross={};ageBands.forEach(function(a){cross[a]={};gradeOrderSorted.forEach(function(g){cross[a][g]=0;});});
@@ -1697,8 +1892,7 @@ function renderWorkforceComposition(emps,selCp){
     cross[band][g]++;
     if(cross[band][g]>crossMax)crossMax=cross[band][g];
   });
-
-  h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden;margin-bottom:10px">';
+  var h='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden;margin-bottom:10px">';
   h+='<div style="padding:8px 14px;background:#4527A0;color:#fff;font-size:11px;font-weight:700">📊 연령대 × 직책 분포</div>';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap">';
   h+='<thead><tr style="background:#f5f5f5"><th style="padding:5px 8px;text-align:left;font-weight:700;color:#666;border-bottom:1px solid #e0e0e0;position:sticky;left:0;background:#f5f5f5">연령대</th>';
@@ -1716,7 +1910,6 @@ function renderWorkforceComposition(emps,selCp){
     });
     h+='<td style="padding:4px 8px;text-align:center;font-weight:800;color:#1a3a5c">'+rowSum+'</td></tr>';
   });
-  // 합계 행
   h+='<tr style="background:#f5f5f5;font-weight:700"><td style="padding:4px 8px;color:#1a3a5c;position:sticky;left:0;background:#f5f5f5">합계</td>';
   var totalAll=0;gradeOrderSorted.forEach(function(g){
     var colSum=0;ageBands.forEach(function(a){colSum+=cross[a][g]||0;});
@@ -1725,10 +1918,6 @@ function renderWorkforceComposition(emps,selCp){
   });
   h+='<td style="padding:4px 8px;text-align:center;color:#1a3a5c">'+totalAll+'</td></tr>';
   h+='</tbody></table></div></div>';
-
-  // (4) 팀별 평균 근속/연령/급여 요약
-  h+=renderTeamSummary(emps,selCp);
-
   return h;
 }
 
@@ -1971,13 +2160,13 @@ function renderOvPayAnalysis(emps,selCp){
   h+=svgHBar(tKeys.map(function(k){return{lbl:k,v:tenurePay[k].c?Math.round(tenurePay[k].s/tenurePay[k].c):0};}),maxPayT,"#1565C0",20);
   h+='</div>';
 
-  // 직급별 평균 인건비 상세 테이블
+  // 직책별 평균 인건비 상세 테이블
   var gradeMap={};emps.forEach(function(e){if(!gradeMap[e.grade])gradeMap[e.grade]={cnt:0,base:0,net:0,food:0};gradeMap[e.grade].cnt++;gradeMap[e.grade].base+=e.basePay||0;gradeMap[e.grade].net+=e.netPay||0;gradeMap[e.grade].food+=e.food||0;});
   var gradeRows=Object.keys(gradeMap).map(function(g){return{g:g,d:gradeMap[g]};}).sort(function(a,b){return b.d.base-a.d.base;});
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
-  h+='<div style="padding:8px 14px;background:#1a3a5c;color:#fff;font-size:11px;font-weight:700">직급별 인건비 상세</div>';
+  h+='<div style="padding:8px 14px;background:#1a3a5c;color:#fff;font-size:11px;font-weight:700">직책별 인건비 상세</div>';
   h+='<div style="display:grid;grid-template-columns:1fr 50px 70px 70px 70px 70px;padding:5px 14px;background:#f5f5f5;font-size:10px;font-weight:700;color:#666">';
-  h+='<span>직급</span><span style="text-align:right">인원</span><span style="text-align:right">평균기본급</span><span style="text-align:right">평균식대</span><span style="text-align:right">평균실지급</span><span style="text-align:right">합계(실지급)</span></div>';
+  h+='<span>직책</span><span style="text-align:right">인원</span><span style="text-align:right">평균기본급</span><span style="text-align:right">평균식대</span><span style="text-align:right">평균실지급</span><span style="text-align:right">합계(실지급)</span></div>';
   gradeRows.forEach(function(r){
     var gc=GRADE_C[r.g]||{tx:"#666"};
     h+='<div style="display:grid;grid-template-columns:1fr 50px 70px 70px 70px 70px;padding:5px 14px;border-bottom:1px solid #f8f8f8;font-size:11px">';
@@ -2065,7 +2254,7 @@ function renderOvPayAnalysis(emps,selCp){
     if(changed.length){
       h+='<div style="border-top:1px solid #f0f0f0;padding:8px 14px;background:#f8f9fa;font-size:10px;font-weight:700;color:#555">실지급 변동 상위 10명</div>';
       h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">';
-      h+='<tr style="background:#f5f5f5"><th style="padding:4px 10px;text-align:left;font-weight:700;color:#666">이름</th><th style="padding:4px 10px;text-align:left">직급</th><th style="padding:4px 10px;text-align:right">전월</th><th style="padding:4px 10px;text-align:right">당월</th><th style="padding:4px 10px;text-align:right">변동</th><th style="padding:4px 10px;text-align:right">증감률</th></tr>';
+      h+='<tr style="background:#f5f5f5"><th style="padding:4px 10px;text-align:left;font-weight:700;color:#666">이름</th><th style="padding:4px 10px;text-align:left">직책</th><th style="padding:4px 10px;text-align:right">전월</th><th style="padding:4px 10px;text-align:right">당월</th><th style="padding:4px 10px;text-align:right">변동</th><th style="padding:4px 10px;text-align:right">증감률</th></tr>';
       changed.slice(0,10).forEach(function(r){
         var gc=GRADE_C[r.grade]||{tx:"#666"};var dc=pctColor(r.diff);
         h+='<tr style="border-bottom:1px solid #f8f8f8"><td style="padding:4px 10px;font-weight:700">'+esc(r.name.split("(")[0].trim())+'</td><td style="padding:4px 10px;color:'+gc.tx+';font-weight:700">'+esc(r.grade)+'</td><td style="padding:4px 10px;text-align:right;color:#888">'+fmtW(r.prev)+'</td><td style="padding:4px 10px;text-align:right;font-weight:700">'+fmtW(r.cur)+'</td><td style="padding:4px 10px;text-align:right;font-weight:700;color:'+dc+'">'+arrow(r.diff)+fmtW(Math.abs(r.diff))+'</td><td style="padding:4px 10px;text-align:right;font-weight:700;color:'+dc+'">'+r.pct+'%</td></tr>';
@@ -2280,7 +2469,7 @@ function renderDraftInOverview(selCp){
 
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:600px">';
   h+='<thead><tr style="background:#f5f5f5">';
-  ["구분","이름","캠퍼스","직급","기안서번호","비고","상태"].forEach(function(c){
+  ["구분","이름","캠퍼스","직책","기안서번호","비고","상태"].forEach(function(c){
     h+='<th style="padding:6px 10px;text-align:left;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -2306,7 +2495,7 @@ function renderDraftInOverview(selCp){
   return h;
 }
 
-// ===== 인건비 심층: 급여 분포 / 직급 내 편차 / 평균 추이 / 예상 =====
+// ===== 인건비 심층: 급여 분포 / 직책 내 편차 / 평균 추이 / 예상 =====
 function renderPayDeepDive(emps,selCp){
   var h='<div style="font-size:12px;font-weight:800;color:#1a3a5c;margin:18px 0 8px;padding-bottom:6px;border-bottom:2px solid #e8e8e8">💵 급여 심층 분석 — '+esc(selCp)+'</div>';
 
@@ -2343,9 +2532,9 @@ function renderPayDeepDive(emps,selCp){
   }else{h+='<div style="font-size:11px;color:#aaa;padding:20px 0;text-align:center">데이터 없음</div>';}
   h+='</div>';
 
-  // (6) 동일 직급 내 급여 편차
+  // (6) 동일 직책 내 급여 편차
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;border-top:3px solid #880E4F;padding:12px 14px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📏 직급별 급여 편차 (같은 직급 내 차이)</div>';
+  h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📏 직책별 급여 편차 (같은 직책 내 차이)</div>';
   var gradeStats={};
   emps.forEach(function(e){
     if(!e.basePay)return;
@@ -2367,7 +2556,7 @@ function renderPayDeepDive(emps,selCp){
   if(!gStatsArr.length){h+='<div style="font-size:11px;color:#aaa;padding:20px 0;text-align:center">데이터 없음</div>';}
   else{
     h+='<div style="overflow-x:auto;max-height:180px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:10px">';
-    h+='<thead><tr style="background:#f5f5f5;position:sticky;top:0"><th style="padding:4px 8px;text-align:left;font-weight:700;color:#666;font-size:9px">직급</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">N</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">최소</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">중앙</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">최대</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">편차</th></tr></thead><tbody>';
+    h+='<thead><tr style="background:#f5f5f5;position:sticky;top:0"><th style="padding:4px 8px;text-align:left;font-weight:700;color:#666;font-size:9px">직책</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">N</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">최소</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">중앙</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">최대</th><th style="padding:4px 6px;text-align:right;font-weight:700;color:#666;font-size:9px">편차</th></tr></thead><tbody>';
     gStatsArr.forEach(function(r,i){
       var gc=GRADE_C[r.g]||{tx:"#666"};
       var rangePct=r.min?Math.round(r.range/r.min*100):0;
@@ -2433,6 +2622,43 @@ function renderPayDeepDive(emps,selCp){
   h+='</div>';
   h+='<div style="font-size:9px;color:#aaa;margin-top:6px">※ 인상=건당 평균+5%, 입퇴사=월평균실지급 기준의 단순 추정. 정확한 값은 다음 달 Raw 기준.</div>';
   h+='</div>';
+
+  // ===== 캠퍼스별 인건비 급변 (기존 리스크 탭에서 이동) =====
+  var prevKey=getPrevMonthKey();
+  if(prevKey){
+    h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #C62828;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+    h+='<div style="font-size:11px;font-weight:800;color:#C62828;margin-bottom:8px">📊 캠퍼스별 인건비 급변 (전월 대비 ±20%↑)</div>';
+    var curByCp={},prevByCp={};
+    emps.forEach(function(e){if(!curByCp[e.campus])curByCp[e.campus]={base:0,cnt:0};curByCp[e.campus].base+=e.basePay||0;curByCp[e.campus].cnt++;});
+    getEmpsForMonth(prevKey,selCp).forEach(function(e){if(!prevByCp[e.campus])prevByCp[e.campus]={base:0,cnt:0};prevByCp[e.campus].base+=e.basePay||0;prevByCp[e.campus].cnt++;});
+    var cpChanges=[];
+    var allCps={};Object.keys(curByCp).forEach(function(k){allCps[k]=true;});Object.keys(prevByCp).forEach(function(k){allCps[k]=true;});
+    Object.keys(allCps).forEach(function(cpName){
+      var c=curByCp[cpName]||{base:0,cnt:0};var p=prevByCp[cpName]||{base:0,cnt:0};
+      var diff=p.base?((c.base-p.base)/p.base*100):0;
+      cpChanges.push({campus:cpName,curBase:c.base,prevBase:p.base,diff:Math.round(diff*10)/10,curCnt:c.cnt,prevCnt:p.cnt});
+    });
+    cpChanges.sort(function(a,b){return Math.abs(b.diff)-Math.abs(a.diff);});
+    var warnings=cpChanges.filter(function(c){return Math.abs(c.diff)>=20;});
+    if(!warnings.length)h+='<div style="font-size:11px;color:#2E7D32;padding:8px">✓ 모든 캠퍼스 인건비가 전월 대비 ±20% 내</div>';
+    else{
+      h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5">';
+      h+='<th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">캠퍼스</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">전월 기본급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">당월 기본급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">인원변동</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">증감률</th></tr></thead><tbody>';
+      warnings.forEach(function(c,i){
+        var cc2=CAMPUS_C[c.campus]||{hd:"#555"};
+        var col=c.diff>0?"#C62828":"#1565C0";
+        h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
+        h+='<td style="padding:3px 8px;font-weight:700;color:'+cc2.hd+'">'+esc(c.campus)+'</td>';
+        h+='<td style="padding:3px 8px;text-align:right;color:#888">'+fmtW(c.prevBase)+'</td>';
+        h+='<td style="padding:3px 8px;text-align:right;font-weight:700">'+fmtW(c.curBase)+'</td>';
+        h+='<td style="padding:3px 8px;text-align:right">'+c.prevCnt+'→'+c.curCnt+'</td>';
+        h+='<td style="padding:3px 8px;text-align:center;font-weight:800;color:'+col+'">'+(c.diff>0?"▲":"▼")+' '+Math.abs(c.diff)+'%</td>';
+        h+='</tr>';
+      });
+      h+='</tbody></table>';
+    }
+    h+='</div>';
+  }
 
   return h;
 }
@@ -2543,10 +2769,13 @@ function renderOvTrend(selCp){
   }
   h+='</div>';
 
+  // 여러 월 비교 (현황에서 이동)
+  h+=renderMultiMonthCompare(selCp);
+
   return h;
 }
-function pctColor(v){return v>0?"#E53935":v<0?"#2E7D32":"#888";}
 function arrow(v){return v>0?"▲":v<0?"▼":"─";}
+function pctColor(v){return v>0?"#E53935":v<0?"#2E7D32":"#888";}
 function kpiCard(lbl,cur,prev,diff,pct,isMoney){
   var c=pctColor(diff);
   return'<div style="background:#fff;border-radius:10px;padding:12px 14px;border:1px solid #e0e0e0">'
@@ -2621,7 +2850,7 @@ function renderOvCompare(emps,selCp){
   h+='<div style="padding:8px 14px;background:#1a3a5c;color:#fff;font-size:11px;font-weight:700">전월 대비 실지급 변동 (상위 10명)</div>';
   if(!changed.length)h+='<div style="padding:20px;text-align:center;color:#aaa">변동 없음</div>';
   else{
-    h+='<div style="display:grid;grid-template-columns:1fr 70px 80px 80px 80px 70px;padding:5px 14px;background:#f5f5f5;font-size:10px;font-weight:700;color:#666"><span>이름</span><span>직급</span><span style="text-align:right">전월</span><span style="text-align:right">당월</span><span style="text-align:right">변동액</span><span style="text-align:right">증감률</span></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 70px 80px 80px 80px 70px;padding:5px 14px;background:#f5f5f5;font-size:10px;font-weight:700;color:#666"><span>이름</span><span>직책</span><span style="text-align:right">전월</span><span style="text-align:right">당월</span><span style="text-align:right">변동액</span><span style="text-align:right">증감률</span></div>';
     changed.slice(0,10).forEach(function(r){
       var gc=GRADE_C[r.grade]||{tx:"#666"};var c=pctColor(r.diff);
       h+='<div style="display:grid;grid-template-columns:1fr 70px 80px 80px 80px 70px;padding:5px 14px;border-bottom:1px solid #f8f8f8;font-size:11px">';
@@ -2688,7 +2917,9 @@ function doAddTeamAll(){
 function renderEmployees(){
   var all=getAllEmployees();
   var q=state.search.trim().toLowerCase();
-  if(q)all=all.filter(function(e){return e.name.toLowerCase().indexOf(q)>=0||e.campus.indexOf(q)>=0||e.team.indexOf(q)>=0||(e.grade||"").indexOf(q)>=0;});
+  // 고급검색이 활성화된 경우 일반 검색 무시하고 정밀 필터 적용
+  if(state.advFilter)all=all.filter(function(e){return matchAdvFilter(e,state.advFilter);});
+  else if(q)all=all.filter(function(e){return e.name.toLowerCase().indexOf(q)>=0||e.campus.indexOf(q)>=0||e.team.indexOf(q)>=0||(e.grade||"").indexOf(q)>=0;});
   if(state.gradeFilter&&state.gradeFilter!=="all")all=all.filter(function(e){return e.grade===state.gradeFilter;});
   if(state.gubnFilter&&state.gubnFilter!=="all")all=all.filter(function(e){return e.gubn===state.gubnFilter;});
   var h='<div class="filters">';
@@ -2696,7 +2927,7 @@ function renderEmployees(){
   ["정규직","단기근로","사업소득","일용직"].forEach(function(g){var gc=GUBN_C[g]||{tx:"#666"};h+='<button class="fpill'+(state.gubnFilter===g?" on":"")+'" style="'+(state.gubnFilter===g?"background:"+gc.tx+";border-color:"+gc.tx:"")+'" onclick="state.gubnFilter=\''+g+'\';render()">'+g+'</button>';});
   h+='<span style="font-size:10px;color:#aaa;margin-left:4px">총 '+all.length+'명</span>';
   h+='</div>';
-  h+='<div class="emp-table"><div class="emp-table-head"><span>#</span><span>이름</span><span>직급</span><span>캠퍼스</span><span>팀</span><span>고용형태</span><span>기본급</span></div><div class="emp-table-body">';
+  h+='<div class="emp-table"><div class="emp-table-head"><span>#</span><span>이름</span><span>직책</span><span>캠퍼스</span><span>팀</span><span>고용형태</span><span>기본급</span></div><div class="emp-table-body">';
   all.forEach(function(e,i){
     var gc=GRADE_C[e.grade]||{tx:"#666"};
     var gubnC=GUBN_C[e.gubn]||{tx:"#666"};
@@ -2743,7 +2974,7 @@ function renderSalary(){
   });
   h+='</div>';
 
-  // 급여 구성 스택 바 + 직급별 평균
+  // 급여 구성 스택 바 + 직책별 평균
   var payComp=[
     {lbl:"기본급",v:totalBase,c:"#1565C0"},
     {lbl:"식대",v:totalFood,c:"#42A5F5"},
@@ -2767,9 +2998,9 @@ function renderSalary(){
   });
   h+='</div>';
 
-  // 직급별 평균 기본급 막대
+  // 직책별 평균 기본급 막대
   h+='<div style="background:#fff;border-radius:10px;padding:14px;border:1px solid #e0e0e0">';
-  h+='<div style="font-size:12px;font-weight:700;margin-bottom:10px;color:#1a3a5c">📊 직급별 평균 기본급</div>';
+  h+='<div style="font-size:12px;font-weight:700;margin-bottom:10px;color:#1a3a5c">📊 직책별 평균 기본급</div>';
   var gradeMap2={};emps.forEach(function(e){if(!gradeMap2[e.grade])gradeMap2[e.grade]={s:0,c:0};gradeMap2[e.grade].s+=e.basePay||0;gradeMap2[e.grade].c++;});
   var gRows=Object.keys(gradeMap2).map(function(g){return{lbl:g,v:gradeMap2[g].c?Math.round(gradeMap2[g].s/gradeMap2[g].c):0};}).sort(function(a,b){return b.v-a.v;});
   var maxGv=gRows.length?gRows[0].v:1;
@@ -2795,7 +3026,7 @@ function renderSalary(){
   h+='<div style="overflow-x:auto;max-height:380px;overflow-y:auto">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap">';
   h+='<thead><tr style="background:#f5f5f5;position:sticky;top:0">';
-  ["#","이름","직급","고용형태","캠퍼스","기본급","식대","차량","연장수당","공제합계","실지급"].forEach(function(c){h+='<th style="padding:5px 8px;text-align:'+(["#","이름","직급","고용형태","캠퍼스"].indexOf(c)>=0?"left":"right")+';font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';});
+  ["#","이름","직책","고용형태","캠퍼스","기본급","식대","차량","연장수당","공제합계","실지급"].forEach(function(c){h+='<th style="padding:5px 8px;text-align:'+(["#","이름","직책","고용형태","캠퍼스"].indexOf(c)>=0?"left":"right")+';font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';});
   h+='</tr></thead><tbody>';
   emps.forEach(function(e,i){
     var gc=GRADE_C[e.grade]||{tx:"#666"};var gubnC=GUBN_C[e.gubn]||{tx:"#666"};
@@ -2828,7 +3059,7 @@ var RAW_FIELDS=[
   {key:"name",    label:"성명",        required:true},
   {key:"joinDate",label:"입사일",      required:false},
   {key:"leaveDate",label:"퇴사일",     required:false},
-  {key:"grade",   label:"직급",        required:false},
+  {key:"grade",   label:"직책",        required:false},
   {key:"basePay", label:"기본급",      required:false},
   {key:"food",    label:"식대",        required:false},
   {key:"carAllow",label:"차량보조금",  required:false},
@@ -2868,7 +3099,7 @@ var AUTO_MAP={
   name:["성명","이름","name","성    명"],
   joinDate:["입사일","join","입사"],
   leaveDate:["퇴사일","leave","퇴사"],
-  grade:["직급","grade","직위"],
+  grade:["직책","직급","grade","직위"],
   basePay:["기 본 급","기본급","기본","base","basepay"],
   food:["식대","food","식비"],
   carAllow:["차량보조금","차량","car"],
@@ -3024,7 +3255,7 @@ function renderUpStep2(){
   h+='<div class="import-stat" style="background:#FFEBEE"><div class="is-num" style="color:#C62828">'+cntE+'</div><div class="is-lbl" style="color:#C62828">오류</div></div>';
   h+='</div>';
   h+='<div class="preview-table-wrap"><table class="preview-table"><thead><tr>';
-  h+='<th>상태</th><th>캠퍼스</th><th>사번</th><th>구분</th><th>성명</th><th>직급</th><th>입사일</th><th>기본급</th><th>식대</th><th>연장수당</th><th>공제합계</th><th>차인지급액</th>';
+  h+='<th>상태</th><th>캠퍼스</th><th>사번</th><th>구분</th><th>성명</th><th>직책</th><th>입사일</th><th>기본급</th><th>식대</th><th>연장수당</th><th>공제합계</th><th>차인지급액</th>';
   h+='</tr></thead><tbody>';
   rows.forEach(function(r){
     var cls=r._status==="new"?"new-row":r._status==="update"?"":"dup-row";if(r._status==="err")cls="err-row";
@@ -3069,7 +3300,7 @@ function renderRawData(){
   h+='<div style="background:#fff;border-radius:8px;padding:9px 12px;border:1px solid #e0e0e0"><div style="font-size:9px;color:#888">인원</div><div style="font-size:14px;font-weight:800">'+recs.length+'명</div></div>';
   h+='</div>';
   h+='<div class="raw-table-wrap"><table class="raw-table"><thead><tr>';
-  h+='<th>#</th><th>캠퍼스</th><th>사번</th><th>구분</th><th>성명</th><th>국적</th><th>직급</th><th>입사일</th><th>퇴사일</th><th>기본급</th><th>식대</th><th>차량</th><th>기타수당</th><th>인센티브</th><th>연장수당</th><th>연차수당</th><th>항공료</th><th>자녀교육</th><th>기타정산</th><th>지급합계</th><th>국민연금</th><th>건강보험</th><th>장기요양</th><th>고용보험</th><th>소득세</th><th>지방소득세</th><th>공제합계</th><th>차인지급액</th><th>연장시간</th><th>업로드일</th>';
+  h+='<th>#</th><th>캠퍼스</th><th>사번</th><th>구분</th><th>성명</th><th>국적</th><th>직책</th><th>입사일</th><th>퇴사일</th><th>기본급</th><th>식대</th><th>차량</th><th>기타수당</th><th>인센티브</th><th>연장수당</th><th>연차수당</th><th>항공료</th><th>자녀교육</th><th>기타정산</th><th>지급합계</th><th>국민연금</th><th>건강보험</th><th>장기요양</th><th>고용보험</th><th>소득세</th><th>지방소득세</th><th>공제합계</th><th>차인지급액</th><th>연장시간</th><th>업로드일</th>';
   h+='</tr></thead><tbody>';
   recs.forEach(function(r,i){
     h+='<tr>';
@@ -3186,7 +3417,7 @@ function parsePayNum(s){if(s===""||s===null||s===undefined)return 0;var n=String
 // ===== 사번 특수값 처리 =====
 var INOUT_EMPID_KEYWORDS=["입사","퇴사","입퇴사"];
 var MATERNITY_EMPID_KEYWORDS=["휴직","육휴","출산","육단","복직/인상","전환"];
-// 직급→팀 자동분류 맵
+// 직책→팀 자동분류 맵
 var GRADE_TEAM_MAP={
   "원장":"관리자","부원장":"관리자","본부장":"관리자",
   "AC교수부장":"관리자","EC교수부장":"관리자","KC교수부장":"관리자",
@@ -3313,16 +3544,19 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
   var addedCnt=0,updatedCnt=0,inoutCnt=0,maternityCnt=0,removedCnt=0;
   var now=new Date().toISOString();
 
-  // 1단계: 시트 데이터 미리 파싱 (이름 Set 추출)
-  var parsedRecs=[];var sheetNames={};
+  // 1단계: 시트 데이터 미리 파싱 (이름 + UID Set 추출)
+  var parsedRecs=[];var sheetNames={};var sheetUids={};
   rawRows.forEach(function(row){
     var rec=extractRawRow(row,mapping);
     if(!rec.name)return;
     rec.name=String(rec.name).trim();
     rec._uploadedAt=now;rec._month=targetMonth;rec._source=sourceTag;
+    // _uid 자동 계산 (동명이인 구분용 고유 ID)
+    rec._uid=generateUid(rec);
     parsedRecs.push(rec);
     sheetNames[rec.name]=true;
-    // parseRawName으로 정제된 이름도 함께 Set에 (육단_... 같은 변형)
+    if(rec._uid)sheetUids[rec._uid]=true;
+    // parseRawName으로 정제된 이름도 함께 Set에
     var parsed=parseRawName(rec.name);
     if(parsed.name)sheetNames[parsed.name]=true;
   });
@@ -3408,14 +3642,14 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
       var nameClean=parseRawName(rec.name).name||rec.name;
       var already=target.inoutRecords.some(function(io){return io.name===nameClean&&io._fromRaw;});
       if(!already){
-        if(isIn||isInOut){target.inoutRecords.push({type:"입사",date:rec.joinDate||targetMonth,name:nameClean,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
-        if(isOut||isInOut){target.inoutRecords.push({type:"퇴사",date:rec.leaveDate||targetMonth,name:nameClean,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
+        if(isIn||isInOut){target.inoutRecords.push({type:"입사",date:rec.joinDate||targetMonth,name:nameClean,_uid:rec._uid,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
+        if(isOut||isInOut){target.inoutRecords.push({type:"퇴사",date:rec.leaveDate||targetMonth,name:nameClean,_uid:rec._uid,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
       }
     }
     if(isRaise){
       var nameCleanR=parseRawName(rec.name).name||rec.name;
       var alreadyRaise=target.inoutRecords.some(function(io){return io.name===nameCleanR&&io.type==="인상"&&io._fromRaw;});
-      if(!alreadyRaise){target.inoutRecords.push({type:"인상",date:rec.joinDate||targetMonth,name:nameCleanR,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",remark:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
+      if(!alreadyRaise){target.inoutRecords.push({type:"인상",date:rec.joinDate||targetMonth,name:nameCleanR,_uid:rec._uid,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",remark:sourceTag+" 자동반영",_fromRaw:true});inoutCnt++;}
     }
 
     // 모성보호 자동 반영
@@ -3429,10 +3663,79 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
       var cat=catMatch?catMatch[1]:"휴직";
       var matName=parsed.name||rec.name;
       var already2=target.maternityRecords.some(function(m){return m.name===matName;});
-      if(!already2){target.maternityRecords.push({name:matName,campus:rec.campus||"",grade:rec.grade||"",gubn:rec.gubn||"",category:cat,startDate:dates.start,endDate:dates.end,rawName:rec.name,empId:empIdStr,_fromRaw:true,_uploadedAt:now});maternityCnt++;}
+      if(!already2){target.maternityRecords.push({name:matName,_uid:rec._uid,campus:rec.campus||"",grade:rec.grade||"",gubn:rec.gubn||"",category:cat,startDate:dates.start,endDate:dates.end,rawName:rec.name,empId:empIdStr,_fromRaw:true,_uploadedAt:now});maternityCnt++;}
     }
   });
   return{added:addedCnt,updated:updatedCnt,removed:removedCnt,inout:inoutCnt,maternity:maternityCnt};
+}
+
+// ===== 퇴사자 전역 저장소 (모든 월의 inoutRecords에서 자동 수집) =====
+// UID 기반. 급여특이사항 > 퇴사 탭에 퇴사일이 입력된 사람은 모두 "퇴직" 상태
+var GLOBAL_RETIRED_EMPLOYEES={};// _uid → { name, campus, grade, gubn, leaveDate, reason, firstJoin, lastBasePay, month }
+
+// 관리자 코멘트 저장소 (Firebase 동기화됨)
+// UID → { text: string, updatedAt: ISO date, updatedBy: clientId }
+var GLOBAL_ADMIN_COMMENTS={};
+
+// 모든 월의 inoutRecords에서 퇴사 기록을 수집해 GLOBAL_RETIRED_EMPLOYEES 재구축
+// 퇴사일이 있는 사람은 과거든 미래든 모두 퇴직으로 분류
+function rebuildRetiredEmployees(){
+  var out={};
+  var months=Object.keys(MONTHS_DATA).sort(monthCompare);
+  months.forEach(function(mk){
+    var md=MONTHS_DATA[mk];if(!md||!md.inoutRecords)return;
+    md.inoutRecords.forEach(function(io){
+      if(io.type!=="퇴사")return;
+      if(!io.date)return;// 퇴사일 없으면 제외
+      // UID 확보: io._uid 우선, 없으면 이름+최초입사일 유추
+      var uid=io._uid;
+      if(!uid){
+        var rr=(md.rawRecords||[]).find(function(r){return r.name===io.name;});
+        uid=rr?rr._uid:generateUid({name:io.name,firstJoin:(rr&&rr.firstJoin)||io.date});
+      }
+      if(!uid)return;
+      // 같은 UID의 여러 퇴사 기록 중 가장 최근 것 유지
+      var existing=out[uid];
+      if(existing&&existing.leaveDate>=io.date)return;
+      // 원본 Raw에서 추가 정보 보강
+      var rr2=(md.rawRecords||[]).find(function(r){return r._uid===uid||r.name===io.name;});
+      out[uid]={
+        _uid:uid,
+        name:io.name,
+        campus:io.campus||(rr2&&rr2.campus)||"",
+        grade:io.grade||(rr2&&rr2.grade)||"",
+        gubn:io.gubn||(rr2&&rr2.gubn)||"",
+        nationality:io.nationality||(rr2&&rr2.nationality)||"",
+        leaveDate:io.date,
+        firstJoin:(rr2&&rr2.firstJoin)||"",
+        lastBasePay:(rr2&&rr2.basePay)||0,
+        reason:io.leaveReason||io.reason||"",
+        memo:io.memo||"",
+        detectedInMonth:mk
+      };
+    });
+  });
+  GLOBAL_RETIRED_EMPLOYEES=out;
+  return out;
+}
+
+function isRetiredByUid(uid){
+  return!!(uid&&GLOBAL_RETIRED_EMPLOYEES[uid]);
+}
+
+// 관리자 코멘트 저장
+function saveAdminComment(uid,text){
+  if(!uid)return;
+  GLOBAL_ADMIN_COMMENTS[uid]={
+    text:text||"",
+    updatedAt:new Date().toISOString(),
+    updatedBy:(FB&&FB.clientId)||"local"
+  };
+  scheduleSave();
+}
+
+function getAdminComment(uid){
+  return(GLOBAL_ADMIN_COMMENTS[uid]&&GLOBAL_ADMIN_COMMENTS[uid].text)||"";
 }
 
 // ===== Apps Script 웹앱 호출 → 전체 월 자동 동기화 =====
@@ -3462,7 +3765,6 @@ function syncFromGoogleSheet(opts){
         foundMonthKeys[monthKey]=true;
         var rows=data[tabName];
         if(!rows||!rows.length){
-          // 탭은 있지만 완전히 빈 상태 — 그 월의 GSheet 데이터 모두 삭제
           if(MONTHS_DATA[monthKey]){
             var stats0=ingestRows(monthKey,[],{},"GSheet");
             syncedMonths.push(monthKey);
@@ -3470,7 +3772,6 @@ function syncFromGoogleSheet(opts){
           }
           return;
         }
-        // 헤더 행 찾기 (빈 행 스킵)
         var hi=0;
         for(var i=0;i<Math.min(rows.length,5);i++){if(rows[i].some(function(c){return String(c).trim()!="";})){hi=i;break;}}
         var headers=rows[hi].map(function(c){return String(c).trim();});
@@ -3482,6 +3783,9 @@ function syncFromGoogleSheet(opts){
         totalStats.removed+=stats.removed;
         totalStats.inout+=stats.inout;totalStats.maternity+=stats.maternity;
       });
+
+      // 모든 월 동기화 끝나면 퇴사자 저장소 재구축
+      rebuildRetiredEmployees();
 
       // 시트에서 탭 자체가 사라진 월 감지 (자동 삭제 안 함 — 실수 방지)
       var orphanMonths=[];
@@ -3545,9 +3849,15 @@ function updateGSheetStatus(){
 function syncEmpFromRaw(rec,targetMonth,createTeam){
   var md=MONTHS_DATA[targetMonth];if(!md||!md.deptData)return;
   var nameClean=parseRawName(rec.name).name||rec.name;rec._cleanName=nameClean;
+  var recUid=rec._uid||generateUid(rec);
   var found=null;
-  md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){if(e.name===nameClean||e.name===rec.name)found=e;});});});
+  // UID 우선 매칭, 없으면 이름 매칭 (레거시 호환)
+  md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){
+    if(recUid&&e._uid===recUid){found=e;return;}
+    if(!found&&(e.name===nameClean||e.name===rec.name))found=e;
+  });});});
   if(found){
+    if(recUid&&!found._uid)found._uid=recUid;// 레거시 직원에 UID 주입
     if(rec.grade&&rec.grade!=="")found.grade=rec.grade;
     if(rec.gubn&&rec.gubn!=="")found.gubn=rec.gubn;
     if(rec.basePay&&rec.basePay>0){found.basePay=rec.basePay;found.food=rec.food||0;found.carAllow=rec.carAllow||0;found.overTime=rec.overTime||0;found.deduct=rec.deduct||0;found.netPay=rec.netPay||0;}
@@ -3559,22 +3869,18 @@ function syncEmpFromRaw(rec,targetMonth,createTeam){
     var cpFound=null;md.deptData.campuses.forEach(function(cp){if(cp.name===rec.campus)cpFound=cp;});
     if(!cpFound&&createTeam){cpFound={name:rec.campus,teams:[]};md.deptData.campuses.push(cpFound);if(!CAMPUS_C[rec.campus])CAMPUS_C[rec.campus]={hd:"#607D8B"};}
     if(cpFound){
-      // 직급에 따른 팀 자동분류
       var autoTeam=getAutoTeam(rec.grade);rec._autoTeam=autoTeam;
       var tFound=null;cpFound.teams.forEach(function(t){if(t.name===autoTeam)tFound=t;});
       if(!tFound&&createTeam){
-        // 6개 표준 팀 순서로 생성
         var STD_TEAMS=["관리자","유치부","상담부","교수부","단시간근로","셔틀기사"];
         tFound={name:autoTeam,manager:"",employees:[],pending:[]};
-        // 순서대로 삽입
         var insertIdx=cpFound.teams.length;
         var ai=STD_TEAMS.indexOf(autoTeam);
         for(var ti=0;ti<cpFound.teams.length;ti++){var ei2=STD_TEAMS.indexOf(cpFound.teams[ti].name);if(ei2>ai){insertIdx=ti;break;}}
         cpFound.teams.splice(insertIdx,0,tFound);
       }
       if(tFound){
-        var empObj={name:nameClean,empId:rec.empId||"",gubn:rec.gubn||"정규직",grade:rec.grade||"",joinDate:rec.joinDate||"",phone:"",basePay:rec.basePay||0,food:rec.food||0,carAllow:rec.carAllow||0,overTime:rec.overTime||0,deduct:rec.deduct||0,netPay:rec.netPay||0,nationality:rec.nationality||"",_source:rec._source||"GSheet"};
-        // 직급 순서에 맞게 삽입
+        var empObj={name:nameClean,_uid:recUid,empId:rec.empId||"",gubn:rec.gubn||"정규직",grade:rec.grade||"",joinDate:rec.joinDate||"",phone:"",basePay:rec.basePay||0,food:rec.food||0,carAllow:rec.carAllow||0,overTime:rec.overTime||0,deduct:rec.deduct||0,netPay:rec.netPay||0,nationality:rec.nationality||"",_source:rec._source||"GSheet"};
         var order=GRADE_TEAM_ORDER[autoTeam]||[];
         var insertPos=tFound.employees.length;
         var myOrder=order.indexOf(rec.grade);
@@ -3589,7 +3895,7 @@ function syncEmpFromRaw(rec,targetMonth,createTeam){
 
 function downloadTemplate(){
   ensureXLSX(function(){
-    var hdrs=["캠퍼스","사번","구분","성    명","입사일","퇴사일","직급","","기 본 급","식대","차량보조금","기타수당","주택보조금","인센티브","연장근로수당","연차수당","항공료","자녀교육비","기타정산","지급합계","국민연금","건강보험","장기요양","고용보험","산재보험","AM","기타공제1","기타공제2","퇴사자  연말정산","소득세","지방소득세","공제합계","차인지급액","","연장시간","주민등록번호","최초입사일","국적"];
+    var hdrs=["캠퍼스","사번","구분","성    명","입사일","퇴사일","직책","","기 본 급","식대","차량보조금","기타수당","주택보조금","인센티브","연장근로수당","연차수당","항공료","자녀교육비","기타정산","지급합계","국민연금","건강보험","장기요양","고용보험","산재보험","AM","기타공제1","기타공제2","퇴사자  연말정산","소득세","지방소득세","공제합계","차인지급액","","연장시간","주민등록번호","최초입사일","국적"];
     var sample=["광교","-3","정규직","홍길동","2023-03-01","","원장","",5000000,2157000,100000,0,0,0,500000,0,0,0,0,5600000,250000,200000,25000,50000,0,0,0,0,0,400000,40000,965000,4635000,"",40,"800101-1000001","2023-03-01","대한민국"];
     var wb=XLSX.utils.book_new();var ws=XLSX.utils.aoa_to_sheet([hdrs,sample]);
     ws["!cols"]=hdrs.map(function(h){return{wch:Math.max(String(h).length*1.5,10)};});
@@ -3598,7 +3904,7 @@ function downloadTemplate(){
 }
 
 function downloadTemplateCsv(){
-  var h="캠퍼스,사번,구분,성명,입사일,퇴사일,직급,기본급,식대,차량보조금,기타수당,연장근로수당,연차수당,항공료,기타정산,지급합계,국민연금,건강보험,장기요양,고용보험,소득세,지방소득세,공제합계,차인지급액,연장시간,국적\n";
+  var h="캠퍼스,사번,구분,성명,입사일,퇴사일,직책,기본급,식대,차량보조금,기타수당,연장근로수당,연차수당,항공료,기타정산,지급합계,국민연금,건강보험,장기요양,고용보험,소득세,지방소득세,공제합계,차인지급액,연장시간,국적\n";
   var s="광교,-3,정규직,홍길동,2023-03-01,,원장,5000000,2157000,100000,0,500000,0,0,0,5600000,250000,200000,25000,50000,400000,40000,965000,4635000,40,대한민국\n";
   var blob=new Blob(["\uFEFF"+h+s],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download="폴리_급여Raw_양식.csv";a.click();URL.revokeObjectURL(url);notify("CSV 양식 다운로드","ok");
 }
@@ -3666,7 +3972,7 @@ function renderInoutByType(type){
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">';
   h+='<thead><tr style="background:#f5f5f5">';
-  var cols=[["#",40],["날짜",85],["이름",130],["캠퍼스",80],["직급",90],["고용형태",70],[isOut?"퇴사사유":"기안서번호",130],["비고",150],["상태",70],["",40]];
+  var cols=[["#",40],["날짜",85],["이름",130],["캠퍼스",80],["직책",90],["고용형태",70],[isOut?"퇴사사유":"기안서번호",130],["비고",150],["상태",70],["",40]];
   cols.forEach(function(c){h+='<th style="padding:7px 10px;text-align:left;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0;white-space:nowrap;width:'+c[1]+'px;font-size:10px">'+c[0]+'</th>';});
   h+='</tr></thead><tbody>';
   var allInout=D().inoutRecords||[];
@@ -3703,7 +4009,7 @@ function deleteInoutRow(idx){if(!confirm("삭제?"))return;pushUndo("입퇴사 �
 function exportInoutCSV(type){
   var recs=(D().inoutRecords||[]).filter(function(r){return r.type===type;});
   var isOut=type==="퇴사";
-  var rows=[isOut?["날짜","이름","캠퍼스","팀","직급","고용형태","퇴사사유","비고"]:["날짜","이름","캠퍼스","팀","직급","고용형태","기안서번호","비고"]];
+  var rows=[isOut?["날짜","이름","캠퍼스","팀","직책","고용형태","퇴사사유","비고"]:["날짜","이름","캠퍼스","팀","직책","고용형태","기안서번호","비고"]];
   recs.forEach(function(r){rows.push([r.date||"",r.name,r.campus||"",r.team||"",r.grade||"",r.gubn||"",isOut?(r.leaveReason||""):(r.draftNo||""),r.remark||r.memo||""]);});
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c||"").replace(/"/g,'""')+'"';}).join(",");}).join("\n");
   var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=curMonth+"_"+type+".csv";a.click();URL.revokeObjectURL(url);
@@ -3722,7 +4028,7 @@ function renderAllowanceTab(){
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px">';
   h+='<thead><tr style="background:#f5f5f5">';
-  var cols=[["#",40],["날짜",85],["이름",130],["캠퍼스",80],["직급",90],["고용형태",70],["기안서번호",130],["비고",150],["상태",70],["실지급",90]];
+  var cols=[["#",40],["날짜",85],["이름",130],["캠퍼스",80],["직책",90],["고용형태",70],["기안서번호",130],["비고",150],["상태",70],["실지급",90]];
   cols.forEach(function(c){h+='<th style="padding:7px 10px;text-align:left;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0;white-space:nowrap;width:'+c[1]+'px;font-size:10px">'+c[0]+'</th>';});
   h+='</tr></thead><tbody>';
   var allRaws=D().rawRecords||[];
@@ -3749,7 +4055,7 @@ function renderAllowanceTab(){
 }
 function exportAllowanceCSV(){
   var recs=(D().rawRecords||[]).filter(function(r){return String(r.empId||"").indexOf("수당")>=0;});
-  var rows=[["날짜","이름","캠퍼스","직급","고용형태","기안서번호","비고","실지급"]];
+  var rows=[["날짜","이름","캠퍼스","직책","고용형태","기안서번호","비고","실지급"]];
   recs.forEach(function(r){rows.push([(r._uploadedAt||"").slice(0,10),r.name||"",r.campus||"",r.grade||"",r.gubn||"",r.draftNo||"",r.remark||"",r.netPay||0]);});
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c||"").replace(/"/g,'""')+'"';}).join(",");}).join("\n");
   var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=curMonth+"_수당.csv";a.click();URL.revokeObjectURL(url);
@@ -3785,7 +4091,7 @@ function renderDraft(){
   if(!items.length)return h+'<div style="padding:30px;text-align:center;color:#aaa;background:#fff;border-radius:10px;border:1px solid #e0e0e0">입퇴사 및 수당 데이터가 없습니다.</div>';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:700px">';
   h+='<thead><tr style="background:#f5f5f5">';
-  ["구분","이름","캠퍼스","직급","날짜","기안서번호","비고","상태"].forEach(function(c){
+  ["구분","이름","캠퍼스","직책","날짜","기안서번호","비고","상태"].forEach(function(c){
     h+='<th style="padding:6px 10px;text-align:left;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -3818,7 +4124,7 @@ function saveDraftRemark(src,idx,val){
 }
 function exportDraftCSV(){
   var inoutRecs=(D().inoutRecords||[]).filter(function(r){return r.type==="입사"||r.type==="퇴사";});
-  var rows=[["구분","이름","캠퍼스","직급","날짜","기안서번호","비고","상태"]];
+  var rows=[["구분","이름","캠퍼스","직책","날짜","기안서번호","비고","상태"]];
   inoutRecs.forEach(function(r){rows.push([r.type,r.name,r.campus||"",r.grade||"",r.date||"",r.draftNo||"",r.remark||r.memo||"",r.draftNo?"완료":"미작성"]);});
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c||"").replace(/"/g,'""')+'"';}).join(",");}).join("\n");
   var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=curMonth+"_기안서점검.csv";a.click();URL.revokeObjectURL(url);
@@ -3869,7 +4175,7 @@ function renderHrCard(){
   h+='<button onclick="state.hrcardTab=\'active\';state.hrcardSelected=null;render()" style="flex:1;padding:4px 0;border-radius:6px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;border:1.5px solid '+(hrcTab==="active"?"#1a3a5c":"#ddd")+';background:'+(hrcTab==="active"?"#1a3a5c":"#fff")+';color:'+(hrcTab==="active"?"#fff":"#888")+'">재직 '+allEmps.length+'</button>';
   h+='<button onclick="state.hrcardTab=\'retired\';state.hrcardSelected=null;render()" style="flex:1;padding:4px 0;border-radius:6px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;border:1.5px solid '+(hrcTab==="retired"?"#C62828":"#ddd")+';background:'+(hrcTab==="retired"?"#C62828":"#fff")+';color:'+(hrcTab==="retired"?"#fff":"#888")+'">퇴직 '+retired.length+'</button>';
   h+='</div>';
-  h+='<input value="'+esc(state.hrcardSearch||"")+'" placeholder="이름·캠퍼스 검색" style="width:100%;padding:5px 9px;border:1px solid #ddd;border-radius:6px;font-size:11px;font-family:inherit" oninput="state.hrcardSearch=this.value;render()">';
+  h+='<input id="hrcardSearchInput" value="'+esc(state.hrcardSearch||"")+'" placeholder="이름·캠퍼스 검색" style="width:100%;padding:5px 9px;border:1px solid #ddd;border-radius:6px;font-size:11px;font-family:inherit" oncompositionstart="this.dataset._composing=\'1\'" oncompositionend="this.dataset._composing=\'\';safeInputUpdate(this,function(v){state.hrcardSearch=v;});" oninput="safeInputUpdate(this,function(v){state.hrcardSearch=v;});">';
   h+='<div style="font-size:10px;color:#aaa;margin-top:4px">'+filtered.length+'명</div></div>';
   h+='<div style="flex:1;overflow-y:auto">';
   var lastCampus=null;
@@ -3921,63 +4227,123 @@ function moveToActive(name){
 }
 
 // ============================================================
-// 👤 개인 이력 탭 (29, 30, 31, 32)
+// 👤 개인 이력 탭 (29, 30, 31, 32) — 재직/퇴직 토글
 // ============================================================
 function renderPersonalHistory(){
-  // 전체 타임라인 한 번만 계산
-  var allTimelines=buildAllTimelines();
-  var names=Object.keys(allTimelines).sort();
-  var q=(state.personalSearch||"").toLowerCase();
-  var filtered=q?names.filter(function(n){return n.toLowerCase().indexOf(q)>=0;}):names;
-  var sel=state.personalSelected;
+  // 항상 최신 퇴사자 목록 재구축
+  rebuildRetiredEmployees();
 
-  var h='<div style="display:grid;grid-template-columns:240px 1fr;height:calc(100vh - 145px);background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
+  var allTimelines=buildAllTimelines();
+  var uids=Object.keys(allTimelines).filter(function(u){return allTimelines[u].length>0;});
+
+  // 재직/퇴직 분리
+  var retiredUids=[],activeUids=[];
+  uids.forEach(function(u){
+    if(GLOBAL_RETIRED_EMPLOYEES[u])retiredUids.push(u);
+    else activeUids.push(u);
+  });
+
+  var tab=state.personalTab||"active";// "active" | "retired"
+  var curUids=tab==="retired"?retiredUids:activeUids;
+
+  // 이름 정렬
+  curUids.sort(function(a,b){
+    var na=allTimelines[a][0].name||"";var nb=allTimelines[b][0].name||"";
+    return na.localeCompare(nb,"ko");
+  });
+
+  var q=(state.personalSearch||"").toLowerCase();
+  var filtered=q?curUids.filter(function(u){
+    var nm=(allTimelines[u][0].name||"").toLowerCase();
+    return nm.indexOf(q)>=0;
+  }):curUids;
+  var sel=state.personalSelected;// UID
+
+  // 선택된 UID가 현재 탭에 없으면 해제
+  if(sel&&curUids.indexOf(sel)<0){
+    // 퇴직 탭으로 이동 필요하면 자동 전환
+    if(GLOBAL_RETIRED_EMPLOYEES[sel]&&tab==="active"){
+      state.personalTab="retired";
+      return renderPersonalHistory();
+    }
+    // 유효하지 않으면 선택 해제
+    sel=null;state.personalSelected=null;
+  }
+
+  var h='<div style="display:grid;grid-template-columns:280px 1fr;height:calc(100vh - 145px);background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
   // 좌측: 직원 목록
   h+='<div style="border-right:1px solid #e0e0e0;display:flex;flex-direction:column;overflow:hidden">';
-  h+='<div style="padding:10px 12px;border-bottom:1px solid #e0e0e0;background:#f8f9fa">';
-  h+='<div style="font-size:12px;font-weight:800;color:#1a3a5c;margin-bottom:6px">👤 개인 이력 ('+names.length+'명)</div>';
-  h+='<input type="text" placeholder="🔍 이름 검색..." value="'+esc(q)+'" oninput="state.personalSearch=this.value;render()" style="width:100%;padding:5px 8px;border:1px solid #ddd;border-radius:6px;font-size:11px;font-family:inherit">';
+
+  // 재직/퇴직 토글
+  h+='<div style="display:flex;border-bottom:1px solid #e0e0e0;background:#f8f9fa">';
+  h+='<button onclick="state.personalTab=\'active\';state.personalSelected=null;render()" style="flex:1;padding:10px 0;font-size:12px;font-weight:800;cursor:pointer;border:none;background:'+(tab==="active"?"#fff":"transparent")+';color:'+(tab==="active"?"#2E7D32":"#888")+';border-bottom:3px solid '+(tab==="active"?"#2E7D32":"transparent")+';font-family:inherit">🟢 재직 <span style="font-size:10px;opacity:.7">('+activeUids.length+')</span></button>';
+  h+='<button onclick="state.personalTab=\'retired\';state.personalSelected=null;render()" style="flex:1;padding:10px 0;font-size:12px;font-weight:800;cursor:pointer;border:none;background:'+(tab==="retired"?"#fff":"transparent")+';color:'+(tab==="retired"?"#C62828":"#888")+';border-bottom:3px solid '+(tab==="retired"?"#C62828":"transparent")+';font-family:inherit">🔴 퇴직 <span style="font-size:10px;opacity:.7">('+retiredUids.length+')</span></button>';
   h+='</div>';
+
+  h+='<div style="padding:10px 12px;border-bottom:1px solid #e0e0e0;background:#f8f9fa">';
+  h+='<input type="text" id="personalSearchInput" placeholder="🔍 이름 검색..." value="'+esc(q)+'" oncompositionstart="this.dataset._composing=\'1\'" oncompositionend="this.dataset._composing=\'\';safeInputUpdate(this,function(v){state.personalSearch=v;});" oninput="safeInputUpdate(this,function(v){state.personalSearch=v;});" style="width:100%;padding:5px 8px;border:1px solid #ddd;border-radius:6px;font-size:11px;font-family:inherit">';
+  h+='</div>';
+
   h+='<div style="flex:1;overflow-y:auto">';
-  filtered.slice(0,300).forEach(function(name){
-    var tl=allTimelines[name]||[];
+  if(!filtered.length){
+    h+='<div style="padding:30px 12px;text-align:center;color:#aaa;font-size:11px">'+(tab==="retired"?"퇴직자 없음":"재직자 없음")+'</div>';
+  }
+  filtered.slice(0,CONFIG.MAX_PERSONAL_LIST).forEach(function(uid){
+    var tl=allTimelines[uid]||[];
     if(!tl.length)return;
     var latest=tl[tl.length-1];
+    var first=tl[0];
+    var nm=latest.name||"";
+    var cleanName=nm.split("(")[0].trim();
     var cc2=CAMPUS_C[latest.campus]||{hd:"#555"};
-    var isSel=sel===name;
-    h+='<div onclick="state.personalSelected=\''+esc(name)+'\';render()" style="padding:7px 12px;border-bottom:1px solid #f5f5f5;cursor:pointer;background:'+(isSel?"#EEF2FF":"#fff")+';border-left:3px solid '+(isSel?cc2.hd:"transparent")+'">';
-    h+='<div style="font-size:12px;font-weight:700;color:#1a3a5c">'+esc(name.split("(")[0].trim())+'</div>';
-    h+='<div style="font-size:9px;color:#888;margin-top:2px"><span style="color:'+cc2.hd+'">'+esc(latest.campus)+'</span> · '+esc(latest.grade||"-")+' · '+tl.length+'개월</div>';
+    var isSel=sel===uid;
+    var isDup=hasDuplicateName(nm);
+    var retiredInfo=GLOBAL_RETIRED_EMPLOYEES[uid];
+    h+='<div onclick="state.personalSelected=\''+esc(uid)+'\';render()" style="padding:7px 12px;border-bottom:1px solid #f5f5f5;cursor:pointer;background:'+(isSel?"#EEF2FF":"#fff")+';border-left:3px solid '+(isSel?cc2.hd:"transparent")+'">';
+    h+='<div style="font-size:12px;font-weight:700;color:'+(tab==="retired"?"#888":"#1a3a5c")+'">'+esc(cleanName);
+    if(isDup)h+=' <span title="동명이인 있음" style="font-size:9px;color:#E65100;background:#FFF3E0;padding:1px 5px;border-radius:8px;font-weight:700">⚠</span>';
+    h+='</div>';
+    h+='<div style="font-size:9px;color:#888;margin-top:2px"><span style="color:'+cc2.hd+'">'+esc(latest.campus)+'</span> · '+esc(latest.grade||"-")+' · '+tl.length+'개월';
+    if(isDup)h+=' <span style="color:#888">('+esc(first.month)+' 시작)</span>';
+    if(retiredInfo)h+=' <span style="color:#C62828">· '+esc(retiredInfo.leaveDate)+'</span>';
+    h+='</div>';
     h+='</div>';
   });
-  if(filtered.length>300)h+='<div style="padding:8px;font-size:10px;color:#aaa;text-align:center">… '+(filtered.length-300)+'명 더 (검색해서 좁혀주세요)</div>';
+  if(filtered.length>CONFIG.MAX_PERSONAL_LIST)h+='<div style="padding:8px;font-size:10px;color:#aaa;text-align:center">… '+(filtered.length-CONFIG.MAX_PERSONAL_LIST)+'명 더 (검색해서 좁혀주세요)</div>';
   h+='</div></div>';
 
   // 우측: 상세
   h+='<div style="overflow-y:auto;padding:14px 18px;background:#f8f9fa">';
-  if(!sel)h+='<div style="padding:60px;text-align:center;color:#aaa;font-size:13px">좌측에서 직원을 선택하세요</div>';
+  if(!sel)h+='<div style="padding:60px;text-align:center;color:#aaa;font-size:13px">좌측에서 '+(tab==="retired"?"퇴직자":"재직자")+'를 선택하세요</div>';
   else h+=renderPersonalDetail(sel);
   h+='</div></div>';
   return h;
 }
 
-function renderPersonalDetail(name){
-  var tl=getEmployeeTimeline(name);
+function renderPersonalDetail(uid){
+  var all=buildAllTimelines();
+  var tl=all[uid]||[];
   if(!tl.length)return'<div style="padding:40px;text-align:center;color:#aaa">이력 없음</div>';
   var latest=tl[tl.length-1];
   var first=tl[0];
+  var displayName=latest.name;
+  var cleanName=displayName.split("(")[0].trim();
   var cc2=CAMPUS_C[latest.campus]||{hd:"#1a3a5c"};
-  var rr=(MONTHS_DATA[latest.month].rawRecords||[]).find(function(r){return r.name===name;});
+  var rr=(MONTHS_DATA[latest.month].rawRecords||[]).find(function(r){return r._uid===uid||r.name===displayName;});
   var age=rr?calcAge(rr.resident):null;
   var gender=getGender(rr&&rr.resident);
   var tenure=calcTenure((rr&&rr.firstJoin)||first.joinDate||first.month);
-  var isRetired=GLOBAL_RETIRED_MANAGERS.some(function(r){return r.name===name;});
+  // 퇴사 판정: UID 기반 GLOBAL_RETIRED_EMPLOYEES 우선, 기존 관리자 퇴직 목록 폴백
+  var isRetired=isRetiredByUid(uid)||GLOBAL_RETIRED_MANAGERS.some(function(r){return r.name===cleanName;});
+  var retiredInfo=GLOBAL_RETIRED_EMPLOYEES[uid]||null;
+  var isDup=hasDuplicateName(displayName);
 
   var h='';
   // 헤더
   h+='<div style="background:linear-gradient(135deg,'+cc2.hd+' 0%,'+cc2.hd+'cc 100%);color:#fff;border-radius:12px;padding:16px 20px;margin-bottom:12px">';
   h+='<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">';
-  h+='<div style="font-size:22px;font-weight:900">'+esc(name.split("(")[0].trim())+'</div>';
+  h+='<div style="font-size:22px;font-weight:900">'+esc(cleanName)+'</div>';
+  if(isDup)h+='<span style="font-size:10px;padding:3px 10px;border-radius:12px;background:rgba(255,220,100,.3);font-weight:700;color:#FFD54F">⚠ 동명이인 있음</span>';
   if(isRetired)h+='<span style="font-size:10px;padding:3px 10px;border-radius:12px;background:rgba(255,255,255,.25);font-weight:700">퇴직</span>';
   h+='<span style="font-size:11px;opacity:.9">';
   if(gender)h+=gender+' · ';
@@ -3989,6 +4355,14 @@ function renderPersonalDetail(name){
   if(tenure!==null)h+=' · 근속 <b>'+tenure+'년</b>';
   h+='</div>';
   h+='<div style="font-size:10px;opacity:.85;margin-top:3px">이력 '+tl.length+'개월 · '+first.month+' ~ '+latest.month+'</div>';
+  // 퇴사 상세 정보
+  if(retiredInfo){
+    h+='<div style="font-size:10px;margin-top:8px;padding:6px 10px;background:rgba(0,0,0,.25);border-radius:6px">';
+    h+='🔚 퇴사일: <b>'+esc(retiredInfo.leaveDate||"-")+'</b>';
+    if(retiredInfo.reason)h+=' · 사유: <b>'+esc(retiredInfo.reason)+'</b>';
+    if(retiredInfo.reasonDetail)h+=' ('+esc(retiredInfo.reasonDetail)+')';
+    h+='</div>';
+  }
   h+='</div>';
 
   // KPI 3개
@@ -4051,15 +4425,40 @@ function renderPersonalDetail(name){
   h+='</div>';
 
   // 승진 대상 후보 체크 (32번)
-  var promotionReady=tenure>=3&&gradeRanges[gradeRanges.length-1]&&monthsBetween(gradeRanges[gradeRanges.length-1].start,gradeRanges[gradeRanges.length-1].end)>=24;
+  var promotionReady=tenure>=CONFIG.PROMOTION_TENURE_YEARS&&gradeRanges[gradeRanges.length-1]&&monthsBetween(gradeRanges[gradeRanges.length-1].start,gradeRanges[gradeRanges.length-1].end)>=CONFIG.PROMOTION_GRADE_MONTHS;
   if(promotionReady&&!isRetired){
     h+='<div style="background:linear-gradient(135deg,#FFF3E0 0%,#FFE0B2 100%);border:1.5px solid #FFB74D;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
     h+='<div style="font-size:12px;font-weight:800;color:#E65100;margin-bottom:4px">⬆️ 승진 대상 후보</div>';
-    h+='<div style="font-size:10px;color:#E65100">근속 '+tenure+'년 + 현직급 2년 이상 유지 → 검토 권장</div>';
+    h+='<div style="font-size:10px;color:#E65100">근속 '+tenure+'년 + 현직책 2년 이상 유지 → 검토 권장</div>';
     h+='</div>';
   }
 
+  // 관리자 코멘트 (퇴직자일 때 특히 유용 — 재입사 레퍼런스 체크)
+  var comment=getAdminComment(uid);
+  var commentMeta=GLOBAL_ADMIN_COMMENTS[uid];
+  var commentBorder=isRetired?"#6A1B9A":"#00838F";
+  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid '+commentBorder+';border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  h+='<div style="font-size:11px;font-weight:800;color:'+commentBorder+'">📝 관리자 코멘트 '+(isRetired?'<span style="font-size:9px;color:#888;font-weight:400">(재입사 레퍼런스용)</span>':"")+'</div>';
+  if(commentMeta&&commentMeta.updatedAt)h+='<div style="font-size:9px;color:#aaa">최종 수정: '+esc(commentMeta.updatedAt.slice(0,16).replace("T"," "))+'</div>';
+  h+='</div>';
+  h+='<textarea id="adminComment_'+esc(uid)+'" placeholder="'+(isRetired?"퇴사 배경, 근무 태도, 재입사 시 참고사항 등":"특이사항, 평가, 코멘트 등")+'" style="width:100%;min-height:80px;padding:8px 10px;border:1px solid #e0e0e0;border-radius:6px;font-size:11px;font-family:inherit;resize:vertical;box-sizing:border-box">'+esc(comment)+'</textarea>';
+  h+='<div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">';
+  h+='<button onclick="saveCommentFromTextarea(\''+esc(uid)+'\')" style="padding:5px 14px;background:'+commentBorder+';color:#fff;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit">💾 저장</button>';
+  h+='</div>';
+  h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ Firebase 동기화되어 8명 모두 보고 수정 가능</div>';
+  h+='</div>';
+
   return h;
+}
+
+// 코멘트 저장 (UI 핸들러)
+function saveCommentFromTextarea(uid){
+  var ta=document.getElementById("adminComment_"+uid);
+  if(!ta)return;
+  saveAdminComment(uid,ta.value);
+  notify("코멘트 저장됨","ok");
+  // 저장 후 render하면 textarea가 리셋되므로 부드러운 피드백만
 }
 
 // ============================================================
@@ -4103,9 +4502,9 @@ function renderOvOrg(emps,selCp){
   }
   h+='</div>';
 
-  // (26) 캠퍼스별 직급 구성 비율
+  // (26) 캠퍼스별 직책 구성 비율
   h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #6A1B9A;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#6A1B9A;margin-bottom:8px">🏅 캠퍼스별 직급 구성 비율</div>';
+  h+='<div style="font-size:11px;font-weight:800;color:#6A1B9A;margin-bottom:8px">🏅 캠퍼스별 직책 구성 비율</div>';
   var cpGrades={};
   emps.forEach(function(e){
     if(!cpGrades[e.campus])cpGrades[e.campus]={};
@@ -4163,52 +4562,79 @@ function renderOvOrg(emps,selCp){
   }
   h+='</div>';
 
+  // 연령대 × 직책 (현황에서 이동)
+  h+=renderAgeGradeMatrix(emps,selCp);
+
+  // 팀별 요약 (현황에서 이동)
+  h+=renderTeamSummary(emps,selCp);
+
+  // 캠퍼스 이동 매트릭스 (특수에서 이동)
+  h+=renderCampusMoveMatrix();
+
+  return h;
+}
+
+// 캠퍼스 이동 매트릭스 (조직 탭에서 호출)
+function renderCampusMoveMatrix(){
+  var h='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #00838F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+  h+='<div style="font-size:11px;font-weight:800;color:#00838F;margin-bottom:8px">🔄 캠퍼스 간 이동 매트릭스 (전 기간 누적)</div>';
+  var moveMap={};
+  var allTlMap=buildAllTimelines();
+  Object.keys(allTlMap).forEach(function(name){
+    var tl=allTlMap[name];
+    for(var i=1;i<tl.length;i++){
+      if(tl[i-1].campus!==tl[i].campus){
+        var key=tl[i-1].campus+"→"+tl[i].campus;
+        moveMap[key]=(moveMap[key]||0)+1;
+      }
+    }
+  });
+  var moveArr=Object.keys(moveMap).map(function(k){var parts=k.split("→");return{from:parts[0],to:parts[1],cnt:moveMap[k]};}).sort(function(a,b){return b.cnt-a.cnt;});
+  if(!moveArr.length){h+='<div style="font-size:11px;color:#aaa;padding:8px">캠퍼스 간 이동 없음</div></div>';return h;}
+  h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5">';
+  h+='<th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">출발</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">→</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">도착</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">이동자 수</th></tr></thead><tbody>';
+  moveArr.slice(0,30).forEach(function(m,i){
+    var fc=CAMPUS_C[m.from]||{hd:"#555"};var tc=CAMPUS_C[m.to]||{hd:"#555"};
+    h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
+    h+='<td style="padding:3px 8px;font-weight:700;color:'+fc.hd+'">'+esc(m.from)+'</td>';
+    h+='<td style="padding:3px 8px;text-align:center;color:#aaa">→</td>';
+    h+='<td style="padding:3px 8px;font-weight:700;color:'+tc.hd+'">'+esc(m.to)+'</td>';
+    h+='<td style="padding:3px 8px;text-align:right;font-weight:800">'+m.cnt+'명</td>';
+    h+='</tr>';
+  });
+  h+='</tbody></table>';
+  if(moveArr.length>30)h+='<div style="font-size:9px;color:#aaa;margin-top:4px">… 총 '+moveArr.length+'개 조합 중 상위 30개 표시</div>';
+  h+='</div>';
   return h;
 }
 
 // ============================================================
-// 🚨 리스크 분석 (20, 21, 22, 23, 24)
+// 🔚 퇴사 분석 탭 (기존 🚨 리스크 + 현황의 퇴사율 + 특수의 형평성 스코어 통합)
 // ============================================================
-function renderOvRisk(emps,selCp){
-  var h='<div style="font-size:12px;font-weight:800;color:#1a3a5c;margin:8px 0 10px;padding-bottom:6px;border-bottom:2px solid #e8e8e8">🚨 리스크 & 이상 탐지 — '+esc(selCp)+'</div>';
+function renderOvTurnover(emps,selCp){
+  var h='<div style="font-size:12px;font-weight:800;color:#1a3a5c;margin:8px 0 10px;padding-bottom:6px;border-bottom:2px solid #e8e8e8">🔚 퇴사 분석 — '+esc(selCp)+'</div>';
 
+  // 당월 퇴사자 (inoutRecords)
   var outRecs=(D().inoutRecords||[]).filter(function(r){return r.type==="퇴사"&&(selCp==="전체"||r.campus===selCp);});
 
-  // (23) 퇴사 사유별 집계
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #880E4F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📋 퇴사 사유별 집계 (당월 '+outRecs.length+'건)</div>';
-  if(!outRecs.length)h+='<div style="font-size:11px;color:#aaa;padding:8px">당월 퇴사자 없음</div>';
-  else{
-    var reasonMap={};
-    outRecs.forEach(function(r){
-      // memo, remark, reason 필드 통합
-      var reason=(r.reason||r.remark||r.memo||"").trim();
-      if(!reason||reason==="GSheet 자동반영"||reason==="엑셀 자동반영")reason="사유 미기재";
-      // 키워드 분류
-      var cat=reason;
-      if(/자발|개인|이직/.test(reason))cat="자발적 퇴사";
-      else if(/계약만료|계약종료/.test(reason))cat="계약만료";
-      else if(/권고|해고/.test(reason))cat="권고사직";
-      else if(/건강|질병/.test(reason))cat="건강 사유";
-      else if(/결혼|출산|육아/.test(reason))cat="가정 사유";
-      else if(reason==="사유 미기재")cat="사유 미기재";
-      reasonMap[cat]=(reasonMap[cat]||0)+1;
-    });
-    var reasonArr=Object.keys(reasonMap).map(function(k){return{k:k,v:reasonMap[k]};}).sort(function(a,b){return b.v-a.v;});
-    var maxV=reasonArr[0].v;
-    reasonArr.forEach(function(r){
-      var pct=Math.round(r.v/outRecs.length*1000)/10;
-      var color=r.k==="사유 미기재"?"#9E9E9E":r.k==="권고사직"?"#C62828":r.k==="계약만료"?"#F57F17":"#1565C0";
-      h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:10px">';
-      h+='<span style="min-width:100px;font-weight:700;color:'+color+'">'+esc(r.k)+'</span>';
-      h+='<div style="flex:1;background:#f0f0f0;border-radius:3px;height:14px;overflow:hidden;position:relative"><div style="width:'+(r.v/maxV*100)+'%;background:'+color+';height:100%"></div><span style="position:absolute;right:4px;top:0;font-size:9px;color:#333;line-height:14px;font-weight:700">'+r.v+'명 ('+pct+'%)</span></div>';
-      h+='</div>';
-    });
-    h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ 급여 특이사항 > 퇴사 탭의 비고/사유 기록을 자동 분류</div>';
-  }
-  h+='</div>';
+  // 누적 퇴사자 (inoutRecords에서 자동 감지됨)
+  var retiredArr=Object.keys(GLOBAL_RETIRED_EMPLOYEES).map(function(uid){
+    var r=GLOBAL_RETIRED_EMPLOYEES[uid];
+    return Object.assign({_uid:uid},r);
+  });
+  var retiredFiltered=selCp==="전체"?retiredArr:retiredArr.filter(function(r){return r.campus===selCp;});
 
-  // (20, 21) 근속 구간별 퇴사율
+  // 요약 배너
+  if(retiredFiltered.length){
+    h+='<div style="background:#E8F5E9;border:1.5px solid #81C784;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:11px;color:#2E7D32">';
+    h+='<b>📊 전 기간 누적 퇴사자 '+retiredFiltered.length+'명</b> (당월 '+outRecs.length+'건 포함) — 상세 명단은 <b>👤 개인 이력 → 🔴 퇴직</b> 탭 참고';
+    h+='</div>';
+  }
+
+  // (a) 캠퍼스/직책/연봉/국적별 퇴사율 (현황에서 이동)
+  h+=renderTurnoverAnalysis(emps,outRecs,selCp);
+
+  // (b) 근속 구간별 퇴사율
   h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #C62828;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
   h+='<div style="font-size:11px;font-weight:800;color:#C62828;margin-bottom:8px">⏱ 근속 구간별 퇴사율</div>';
   var tenureBands={"수습(6개월↓)":{act:0,out:0},"1년차(6m~1y)":{act:0,out:0},"2~3년차":{act:0,out:0},"4~5년차":{act:0,out:0},"5년+":{act:0,out:0}};
@@ -4245,196 +4671,117 @@ function renderOvRisk(emps,selCp){
   h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ 특히 <span style="color:#C62828;font-weight:700">수습/1년차 퇴사율이 30%↑</span>면 채용·온보딩 개선 신호</div>';
   h+='</div>';
 
-  // (22) 이상 급여 탐지 — 같은 직급 중앙값 ±30% 벗어난 직원
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #F57F17;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#F57F17;margin-bottom:8px">💸 이상 급여 탐지 (직급 중앙값 ±30% 이탈)</div>';
-  var gradeGroups={};
-  emps.forEach(function(e){if(!e.basePay||!e.grade)return;if(!gradeGroups[e.grade])gradeGroups[e.grade]=[];gradeGroups[e.grade].push(e);});
-  var anomalies=[];
-  Object.keys(gradeGroups).forEach(function(g){
-    var arr=gradeGroups[g];if(arr.length<3)return;// 너무 작은 집단은 제외
-    var pays=arr.map(function(e){return e.basePay;});
-    var med=median(pays);
-    arr.forEach(function(e){
-      var diff=(e.basePay-med)/med;
-      if(Math.abs(diff)>=0.30){
-        anomalies.push({name:e.name,campus:e.campus,grade:g,basePay:e.basePay,medianPay:med,diff:Math.round(diff*1000)/10});
-      }
-    });
-  });
-  if(!anomalies.length)h+='<div style="font-size:11px;color:#2E7D32;padding:8px">✓ 모든 직원이 직급 중앙값 ±30% 내</div>';
+  // (c) 퇴사 사유별 집계 — 누적 퇴사자 시트 우선, 없으면 inoutRecords 폴백
+  var useAccumulated=retiredFiltered.length>0;
+  var basis=useAccumulated?retiredFiltered:outRecs;
+  var basisLabel=useAccumulated?"전 기간 누적 "+basis.length+"명":"당월 "+outRecs.length+"건";
+  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #880E4F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+  h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📋 퇴사 사유별 집계 ('+basisLabel+')</div>';
+  if(!basis.length)h+='<div style="font-size:11px;color:#aaa;padding:8px">퇴사자 없음</div>';
   else{
-    anomalies.sort(function(a,b){return Math.abs(b.diff)-Math.abs(a.diff);});
-    h+='<div style="max-height:200px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5;position:sticky;top:0"><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">이름</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">캠퍼스</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">직급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">기본급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">직급 중앙값</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">편차</th></tr></thead><tbody>';
-    anomalies.slice(0,30).forEach(function(a,i){
-      var c=a.diff>0?"#C62828":"#1565C0";
-      h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
-      h+='<td style="padding:3px 8px;font-weight:700;cursor:pointer" onclick="state.tab=\'personal\';state.personalSelected=\''+esc(a.name)+'\';render()">'+esc(a.name)+'</td>';
-      h+='<td style="padding:3px 8px">'+esc(a.campus)+'</td>';
-      h+='<td style="padding:3px 8px">'+esc(a.grade)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:right">'+fmtW(a.basePay)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:right;color:#888">'+fmtW(a.medianPay)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:center;font-weight:800;color:'+c+'">'+(a.diff>0?"+":"")+a.diff+'%</td>';
-      h+='</tr>';
+    var reasonMap={};
+    basis.forEach(function(r){
+      var reason=(r.reason||r.leaveReason||r.remark||r.memo||"").trim();
+      if(!reason||reason==="GSheet 자동반영"||reason==="엑셀 자동반영")reason="사유 미기재";
+      var cat=reason;
+      if(/자발|개인|이직/.test(reason))cat="자발적 퇴사";
+      else if(/계약만료|계약종료/.test(reason))cat="계약만료";
+      else if(/권고|해고/.test(reason))cat="권고사직";
+      else if(/건강|질병/.test(reason))cat="건강 사유";
+      else if(/결혼|출산|육아|가정/.test(reason))cat="가정 사유";
+      else if(/학업|유학|대학원/.test(reason))cat="학업";
+      else if(/은퇴|정년/.test(reason))cat="은퇴";
+      else if(reason==="사유 미기재")cat="사유 미기재";
+      else if(CONFIG.LEAVE_REASONS.indexOf(reason)<0)cat="기타 ("+reason+")";
+      reasonMap[cat]=(reasonMap[cat]||0)+1;
     });
-    h+='</tbody></table></div>';
-    h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ 3명 이상 직급에서 중앙값 ±30% 벗어남. 데이터 오류일 수도 특수 사유일 수도 있음. 이름 클릭 → 개인 이력</div>';
+    var reasonArr=Object.keys(reasonMap).map(function(k){return{k:k,v:reasonMap[k]};}).sort(function(a,b){return b.v-a.v;});
+    var maxV=reasonArr[0].v;
+    reasonArr.forEach(function(r){
+      var pct=Math.round(r.v/basis.length*1000)/10;
+      var color=r.k==="사유 미기재"?"#9E9E9E":r.k==="권고사직"?"#C62828":r.k==="계약만료"?"#F57F17":r.k.indexOf("기타")===0?"#757575":"#1565C0";
+      h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:10px">';
+      h+='<span style="min-width:130px;font-weight:700;color:'+color+'">'+esc(r.k)+'</span>';
+      h+='<div style="flex:1;background:#f0f0f0;border-radius:3px;height:14px;overflow:hidden;position:relative"><div style="width:'+(r.v/maxV*100)+'%;background:'+color+';height:100%"></div><span style="position:absolute;right:4px;top:0;font-size:9px;color:#333;line-height:14px;font-weight:700">'+r.v+'명 ('+pct+'%)</span></div>';
+      h+='</div>';
+    });
+    h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ '+(useAccumulated?"퇴사자 시트 "+CONFIG.LEAVE_REASONS.length+"개 표준 사유 기준":"급여 특이사항 > 퇴사 탭의 사유/비고 자동 분류")+'</div>';
   }
   h+='</div>';
 
-  // (24) 인건비 급증 알림
-  var prevKey=getPrevMonthKey();
-  if(prevKey){
-    h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #00838F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-    h+='<div style="font-size:11px;font-weight:800;color:#00838F;margin-bottom:8px">📊 캠퍼스별 인건비 급변 (전월 대비)</div>';
-    var curByCp={},prevByCp={};
-    emps.forEach(function(e){if(!curByCp[e.campus])curByCp[e.campus]={base:0,cnt:0};curByCp[e.campus].base+=e.basePay||0;curByCp[e.campus].cnt++;});
-    getEmpsForMonth(prevKey,selCp).forEach(function(e){if(!prevByCp[e.campus])prevByCp[e.campus]={base:0,cnt:0};prevByCp[e.campus].base+=e.basePay||0;prevByCp[e.campus].cnt++;});
-    var cpChanges=[];
-    var allCps={};Object.keys(curByCp).forEach(function(k){allCps[k]=true;});Object.keys(prevByCp).forEach(function(k){allCps[k]=true;});
-    Object.keys(allCps).forEach(function(cpName){
-      var c=curByCp[cpName]||{base:0,cnt:0};var p=prevByCp[cpName]||{base:0,cnt:0};
-      var diff=p.base?((c.base-p.base)/p.base*100):0;
-      cpChanges.push({campus:cpName,curBase:c.base,prevBase:p.base,diff:Math.round(diff*10)/10,curCnt:c.cnt,prevCnt:p.cnt});
-    });
-    cpChanges.sort(function(a,b){return Math.abs(b.diff)-Math.abs(a.diff);});
-    var warnings=cpChanges.filter(function(c){return Math.abs(c.diff)>=20;});
-    if(!warnings.length)h+='<div style="font-size:11px;color:#2E7D32;padding:8px">✓ 모든 캠퍼스 인건비가 전월 대비 ±20% 내</div>';
-    else{
-      h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5">';
-      h+='<th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">캠퍼스</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">전월 기본급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">당월 기본급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">인원변동</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">증감률</th></tr></thead><tbody>';
-      warnings.forEach(function(c,i){
-        var cc2=CAMPUS_C[c.campus]||{hd:"#555"};
-        var col=c.diff>0?"#C62828":"#1565C0";
-        h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
-        h+='<td style="padding:3px 8px;font-weight:700;color:'+cc2.hd+'">'+esc(c.campus)+'</td>';
-        h+='<td style="padding:3px 8px;text-align:right;color:#888">'+fmtW(c.prevBase)+'</td>';
-        h+='<td style="padding:3px 8px;text-align:right;font-weight:700">'+fmtW(c.curBase)+'</td>';
-        h+='<td style="padding:3px 8px;text-align:right">'+c.prevCnt+'→'+c.curCnt+'</td>';
-        h+='<td style="padding:3px 8px;text-align:center;font-weight:800;color:'+col+'">'+(c.diff>0?"▲":"▼")+' '+Math.abs(c.diff)+'%</td>';
-        h+='</tr>';
-      });
-      h+='</tbody></table>';
-    }
-    h+='</div>';
-  }
+  // (d) 통합 급여 편차 분석 (이상 급여 + 급여 형평성 통합)
+  h+=renderUnifiedPayAnomaly(emps,selCp);
 
   return h;
 }
 
-// ============================================================
-// 🌡 특수 분석 (44, 45, 48)
-// ============================================================
-function renderOvSpecial(emps,selCp){
-  var h='<div style="font-size:12px;font-weight:800;color:#1a3a5c;margin:8px 0 10px;padding-bottom:6px;border-bottom:2px solid #e8e8e8">🌡 특수 분석 — '+esc(selCp)+'</div>';
-
-  // (48) 고용형태 분리 뷰
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #1565C0;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#1565C0;margin-bottom:8px">💼 고용형태별 분리 뷰</div>';
-  var gubnMap={};
-  emps.forEach(function(e){
-    var cat=getGubnCategory(e.gubn);
-    if(!gubnMap[cat])gubnMap[cat]={cnt:0,totalBase:0,totalNet:0};
-    gubnMap[cat].cnt++;gubnMap[cat].totalBase+=e.basePay||0;gubnMap[cat].totalNet+=e.netPay||0;
+// 통합 급여 편차/형평성 분석 (리스크의 이상급여 + 특수의 형평성 통합)
+function renderUnifiedPayAnomaly(emps,selCp){
+  var mode=state.anomalyMode||"grade";
+  var defaultTh=mode==="grade"?CONFIG.ANOMALY_THRESHOLD_GRADE_PCT:CONFIG.ANOMALY_THRESHOLD_FULL_PCT;
+  var threshold=state.anomalyThreshold||defaultTh;
+  var h='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #F57F17;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+  h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">';
+  h+='<div style="font-size:11px;font-weight:800;color:#F57F17">💸 급여 편차 / 형평성 분석</div>';
+  h+='<div style="display:flex;gap:6px;align-items:center">';
+  h+='<span style="font-size:10px;color:#666">기준:</span>';
+  h+='<button onclick="state.anomalyMode=\'grade\';state.anomalyThreshold=null;render()" style="padding:3px 10px;border-radius:10px;font-size:10px;cursor:pointer;border:1.5px solid '+(mode==="grade"?"#F57F17":"#ddd")+';background:'+(mode==="grade"?"#F57F17":"#fff")+';color:'+(mode==="grade"?"#fff":"#666")+';font-weight:700;font-family:inherit">직책만</button>';
+  h+='<button onclick="state.anomalyMode=\'campus_grade_gubn\';state.anomalyThreshold=null;render()" style="padding:3px 10px;border-radius:10px;font-size:10px;cursor:pointer;border:1.5px solid '+(mode==="campus_grade_gubn"?"#F57F17":"#ddd")+';background:'+(mode==="campus_grade_gubn"?"#F57F17":"#fff")+';color:'+(mode==="campus_grade_gubn"?"#fff":"#666")+';font-weight:700;font-family:inherit">캠퍼스+직책+형태</button>';
+  h+='<span style="font-size:10px;color:#666;margin-left:6px">편차:</span>';
+  [10,20,30].forEach(function(th){
+    h+='<button onclick="state.anomalyThreshold='+th+';render()" style="padding:3px 10px;border-radius:10px;font-size:10px;cursor:pointer;border:1.5px solid '+(threshold===th?"#6A1B9A":"#ddd")+';background:'+(threshold===th?"#6A1B9A":"#fff")+';color:'+(threshold===th?"#fff":"#666")+';font-weight:700;font-family:inherit">±'+th+'%</button>';
   });
-  var gubnArr=Object.keys(gubnMap).map(function(k){return Object.assign({cat:k},gubnMap[k]);}).sort(function(a,b){return b.cnt-a.cnt;});
-  if(!gubnArr.length)h+='<div style="font-size:11px;color:#aaa;padding:8px">데이터 없음</div>';
-  else{
-    h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">';
-    gubnArr.forEach(function(g){
-      var colors={"정규직":"#1565C0","원어민":"#00838F","비정규직":"#F57F17","파트타임":"#6A1B9A","기타":"#9E9E9E"};
-      var c=colors[g.cat]||"#9E9E9E";
-      var pct=Math.round(g.cnt/emps.length*1000)/10;
-      var avgBase=g.cnt?Math.round(g.totalBase/g.cnt):0;
-      h+='<div style="background:'+c+'11;border:1px solid '+c+'55;border-left:4px solid '+c+';border-radius:8px;padding:10px 12px">';
-      h+='<div style="font-size:11px;font-weight:800;color:'+c+'">'+esc(g.cat)+'</div>';
-      h+='<div style="font-size:18px;font-weight:900;color:'+c+'">'+g.cnt+'<span style="font-size:11px">명</span> <span style="font-size:10px;color:#888;font-weight:400">('+pct+'%)</span></div>';
-      h+='<div style="font-size:10px;color:#555;margin-top:3px">평균 기본급 <b>'+fmtW(avgBase)+'</b></div>';
-      h+='<div style="font-size:10px;color:#555">총 실지급 <b>'+fmtW(g.totalNet)+'</b></div>';
-      h+='</div>';
-    });
-    h+='</div>';
-  }
-  h+='</div>';
-
-  // (44) 급여 형평성 스코어
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #6A1B9A;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#6A1B9A;margin-bottom:8px">⚖️ 급여 형평성 스코어 (같은 조건 중앙값 대비 편차)</div>';
-  // 조건 = campus + grade + gubn 조합
+  h+='</div></div>';
+  // 계산
   var groups={};
   emps.forEach(function(e){
     if(!e.basePay||!e.grade)return;
-    var key=e.campus+"|"+e.grade+"|"+getGubnCategory(e.gubn);
+    var key=mode==="grade"?e.grade:e.campus+"|"+e.grade+"|"+getGubnCategory(e.gubn);
     if(!groups[key])groups[key]={emps:[]};
     groups[key].emps.push(e);
   });
-  var scores=[];
+  var minGroupSize=mode==="grade"?CONFIG.ANOMALY_MIN_GROUP_SIZE_GRADE:CONFIG.ANOMALY_MIN_GROUP_SIZE_FULL;
+  var anomalies=[];
   emps.forEach(function(e){
     if(!e.basePay||!e.grade)return;
-    var key=e.campus+"|"+e.grade+"|"+getGubnCategory(e.gubn);
+    var key=mode==="grade"?e.grade:e.campus+"|"+e.grade+"|"+getGubnCategory(e.gubn);
     var grp=groups[key];
-    if(!grp||grp.emps.length<2){scores.push({name:e.name,campus:e.campus,grade:e.grade,basePay:e.basePay,med:null,diff:null,grpSize:grp?grp.emps.length:0});return;}
+    if(!grp||grp.emps.length<minGroupSize)return;
     var med=median(grp.emps.map(function(x){return x.basePay;}));
-    var diff=med?Math.round((e.basePay-med)/med*1000)/10:0;
-    scores.push({name:e.name,campus:e.campus,grade:e.grade,basePay:e.basePay,med:med,diff:diff,grpSize:grp.emps.length});
+    if(!med)return;
+    var diff=Math.round((e.basePay-med)/med*1000)/10;
+    if(Math.abs(diff)>=threshold)anomalies.push({name:e.name,_uid:e._uid,campus:e.campus,grade:e.grade,basePay:e.basePay,med:med,diff:diff,grpSize:grp.emps.length});
   });
-  var scoreFiltered=scores.filter(function(s){return s.med!==null&&Math.abs(s.diff)>=10;}).sort(function(a,b){return b.diff-a.diff;});
-  if(!scoreFiltered.length)h+='<div style="font-size:11px;color:#2E7D32;padding:8px">✓ 모든 직원이 동일 조건 중앙값 ±10% 내 (형평성 양호)</div>';
+  anomalies.sort(function(a,b){return Math.abs(b.diff)-Math.abs(a.diff);});
+  if(!anomalies.length)h+='<div style="font-size:11px;color:#2E7D32;padding:8px">✓ 모든 직원이 기준 중앙값 ±'+threshold+'% 내</div>';
   else{
-    h+='<div style="font-size:10px;color:#888;margin-bottom:6px">동일 (캠퍼스+직급+고용형태) 그룹에서 중앙값 대비 ±10% 이상 차이 나는 직원: <b>'+scoreFiltered.length+'명</b></div>';
-    h+='<div style="max-height:220px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5;position:sticky;top:0"><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">이름</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">캠퍼스</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">직급</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">본인</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">중앙값</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">편차</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">동일조건</th></tr></thead><tbody>';
-    scoreFiltered.slice(0,40).forEach(function(s,i){
-      var col=s.diff>0?"#F57F17":"#C62828";
+    h+='<div style="font-size:10px;color:#888;margin-bottom:6px">매치: <b>'+anomalies.length+'명</b> (기준: '+(mode==="grade"?"직책":"캠퍼스+직책+고용형태")+' 중앙값 ±'+threshold+'%)</div>';
+    h+='<div style="max-height:240px;overflow-y:auto"><table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5;position:sticky;top:0"><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">이름</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">캠퍼스</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">직책</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">본인</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">중앙값</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">편차</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">그룹</th></tr></thead><tbody>';
+    anomalies.slice(0,CONFIG.MAX_ANOMALY_ROWS).forEach(function(a,i){
+      var c=a.diff>0?"#C62828":"#1565C0";
+      var targetUid=a._uid||(getUidsByName(a.name)[0]||a.name);
       h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
-      h+='<td style="padding:3px 8px;font-weight:700;cursor:pointer" onclick="state.tab=\'personal\';state.personalSelected=\''+esc(s.name)+'\';render()">'+esc(s.name)+'</td>';
-      h+='<td style="padding:3px 8px">'+esc(s.campus)+'</td>';
-      h+='<td style="padding:3px 8px">'+esc(s.grade)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:right;font-weight:700">'+fmtW(s.basePay)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:right;color:#888">'+fmtW(s.med)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:center;font-weight:800;color:'+col+'">'+(s.diff>0?"+":"")+s.diff+'%</td>';
-      h+='<td style="padding:3px 8px;text-align:center;color:#888">'+s.grpSize+'명</td>';
+      h+='<td style="padding:3px 8px;font-weight:700;cursor:pointer" onclick="state.tab=\'personal\';state.personalSelected=\''+esc(targetUid)+'\';render()">'+esc(a.name)+(hasDuplicateName(a.name)?' <span style="color:#E65100;font-size:8px">⚠</span>':"")+'</td>';
+      h+='<td style="padding:3px 8px">'+esc(a.campus)+'</td>';
+      h+='<td style="padding:3px 8px">'+esc(a.grade)+'</td>';
+      h+='<td style="padding:3px 8px;text-align:right;font-weight:700">'+fmtW(a.basePay)+'</td>';
+      h+='<td style="padding:3px 8px;text-align:right;color:#888">'+fmtW(a.med)+'</td>';
+      h+='<td style="padding:3px 8px;text-align:center;font-weight:800;color:'+c+'">'+(a.diff>0?"+":"")+a.diff+'%</td>';
+      h+='<td style="padding:3px 8px;text-align:center;color:#888">'+a.grpSize+'명</td>';
       h+='</tr>';
     });
     h+='</tbody></table></div>';
-    h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ 2명 이상 동일 조건 그룹에서만 계산. 편차 큰 건은 승진누락·장기근속·협상결과일 수도 있어 검토 필요.</div>';
+    h+='<div style="font-size:9px;color:#aaa;margin-top:4px">※ 이름 클릭 → 개인 이력으로 이동. 편차 큰 건은 데이터 오류, 장기근속, 협상 결과 등 다양한 원인 가능.</div>';
   }
   h+='</div>';
-
-  // (45) 캠퍼스 간 이동 매트릭스
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #00838F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
-  h+='<div style="font-size:11px;font-weight:800;color:#00838F;margin-bottom:8px">🔄 캠퍼스 간 이동 매트릭스 (전 기간 누적)</div>';
-  // 전 직원 타임라인 캐시 사용
-  var moveMap={};
-  var allTlMap=buildAllTimelines();
-  Object.keys(allTlMap).forEach(function(name){
-    var tl=allTlMap[name];
-    for(var i=1;i<tl.length;i++){
-      if(tl[i-1].campus!==tl[i].campus){
-        var key=tl[i-1].campus+"→"+tl[i].campus;
-        moveMap[key]=(moveMap[key]||0)+1;
-      }
-    }
-  });
-  var moveArr=Object.keys(moveMap).map(function(k){var parts=k.split("→");return{from:parts[0],to:parts[1],cnt:moveMap[k]};}).sort(function(a,b){return b.cnt-a.cnt;});
-  if(!moveArr.length)h+='<div style="font-size:11px;color:#aaa;padding:8px">캠퍼스 간 이동 없음</div>';
-  else{
-    h+='<table style="width:100%;border-collapse:collapse;font-size:10px"><thead><tr style="background:#f5f5f5">';
-    h+='<th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">출발</th><th style="padding:4px 8px;text-align:center;color:#666;font-size:9px">→</th><th style="padding:4px 8px;text-align:left;color:#666;font-size:9px">도착</th><th style="padding:4px 8px;text-align:right;color:#666;font-size:9px">이동자 수</th></tr></thead><tbody>';
-    moveArr.slice(0,30).forEach(function(m,i){
-      var fc=CAMPUS_C[m.from]||{hd:"#555"};var tc=CAMPUS_C[m.to]||{hd:"#555"};
-      h+='<tr style="border-bottom:1px solid #f8f8f8;background:'+(i%2?"#fafafa":"#fff")+'">';
-      h+='<td style="padding:3px 8px;font-weight:700;color:'+fc.hd+'">'+esc(m.from)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:center;color:#aaa">→</td>';
-      h+='<td style="padding:3px 8px;font-weight:700;color:'+tc.hd+'">'+esc(m.to)+'</td>';
-      h+='<td style="padding:3px 8px;text-align:right;font-weight:800">'+m.cnt+'명</td>';
-      h+='</tr>';
-    });
-    h+='</tbody></table>';
-    if(moveArr.length>30)h+='<div style="font-size:9px;color:#aaa;margin-top:4px">… 총 '+moveArr.length+'개 조합 중 상위 30개 표시</div>';
-  }
-  h+='</div>';
-
   return h;
+}
+
+// ============================================================
+// 🚨 리스크 탭 (deprecated, 퇴사분석으로 통합됨. 호환용으로 유지)
+// ============================================================
+function renderOvRisk(emps,selCp){
+  return renderOvTurnover(emps,selCp);
 }
 
 function renderHrCardForm(emp,cards,hrcTab){
@@ -4464,7 +4811,7 @@ function renderHrCardForm(emp,cards,hrcTab){
 
   h+=sec("👤 기본 인적 정보");
   h+=row2(fld("성명","name",card.fullName||emp.name.split("(")[0].trim(),""),fld("생년월일","birth",card.birth||"","YYYY-MM-DD","date"));
-  h+=row2(fld("현 직급","grade",card.grade||emp.grade||"",""),fld("입사일","joinDate",card.joinDate||emp.joinDate||"","YYYY-MM-DD","date"));
+  h+=row2(fld("현 직책","grade",card.grade||emp.grade||"",""),fld("입사일","joinDate",card.joinDate||emp.joinDate||"","YYYY-MM-DD","date"));
   h+=row2(fld("연락처","phone",card.phone||emp.phone||"","010-0000-0000"),fld("이메일","email",card.email||"","example@poly.com"));
   h+=row2(fld("주소","addr",card.addr||"","거주지 주소"),fld("비상연락처","emgContact",card.emgContact||"","긴급연락처"));
   h+=row2(fld("퇴사일","retiredAt",card.retiredAt||emp.retiredAt||"","YYYY-MM-DD (입력 시 퇴직 자동이동)","date"),fld("퇴직사유","retireReason",card.retireReason||"",""));
@@ -4627,7 +4974,7 @@ function printHrCard(name){
   win.document.write('<div class="sub">'+esc(emp.campus||"")+' | '+esc(emp.grade||"")+(card.joinDate?' | 입사 '+card.joinDate:'')+'</div>');
 
   win.document.write('<h2>기본 인적 정보</h2><table>');
-  [["성명",card.fullName||name],["생년월일",card.birth||""],["직급",card.grade||emp.grade||""],
+  [["성명",card.fullName||name],["생년월일",card.birth||""],["직책",card.grade||emp.grade||""],
    ["입사일",card.joinDate||emp.joinDate||""],["연락처",card.phone||""],["이메일",card.email||""],
    ["주소",card.addr||""],["비상연락처",card.emgContact||""]].forEach(function(r){
     win.document.write('<tr><th>'+r[0]+'</th><td>'+r[1]+'</td></tr>');});
@@ -4658,7 +5005,7 @@ function printHrCard(name){
 function showAddInout(){
   var h='<h2>&#128338; 입퇴사 등록</h2>';
   h+='<div class="modal-row"><div class="field"><label>구분</label><select id="io_type"><option value="입사">입사</option><option value="퇴사">퇴사</option></select></div><div class="field"><label>날짜</label><input id="io_date" value="'+new Date().toISOString().slice(0,10)+'"></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>이름</label><input id="io_name" placeholder="홍길동"></div><div class="field"><label>직급</label><select id="io_grade">';
+  h+='<div class="modal-row"><div class="field"><label>이름</label><input id="io_name" placeholder="홍길동"></div><div class="field"><label>직책</label><select id="io_grade">';
   Object.keys(GRADE_C).forEach(function(g){h+='<option value="'+g+'"'+(g==="유치부교사"?" selected":"")+'>'+g+'</option>';});
   h+='</select></div></div>';
   h+='<div class="modal-row"><div class="field"><label>고용형태</label><select id="io_gubn"><option value="정규직">정규직</option><option value="단기근로">단기근로</option><option value="사업소득">사업소득</option><option value="일용직">일용직</option></select></div></div>';
@@ -4695,7 +5042,7 @@ function renderLog(){
 // ===== 설정 탭 =====
 var CFG_NAV=[
   {key:"campus",icon:"🏢",label:"캠퍼스 관리"},
-  {key:"grade", icon:"🏅",label:"직급 체계"},
+  {key:"grade", icon:"🏅",label:"직책 체계"},
   {key:"gsheet",icon:"☁️",label:"구글시트 연동"},
   {key:"firebase",icon:"🔥",label:"Firebase 동기화"},
   {key:"system",icon:"⚙️", label:"시스템 정보"}
@@ -4738,7 +5085,7 @@ function renderCfgFirebase(){
   h+='• 관리자 인사카드 편집 내용<br>';
   h+='• 퇴직 관리자 목록<br>';
   h+='• 수동 추가한 직원·입퇴사·모성보호 기록<br>';
-  h+='• 캠퍼스 색상·순서·직급 설정<br>';
+  h+='• 캠퍼스 색상·순서·직책 설정<br>';
   h+='• 월 탭 숨김·색상 설정<br>';
   h+='• 변경 이력';
   h+='</div>';
@@ -4772,12 +5119,14 @@ function renderCfgFirebase(){
 
 // Firebase 원격 데이터 재로드
 function fbReloadFromRemote(){
-  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  if(!FB.rootRef){notify("Firebase 미연결","warn");return;}
   setDot("busy","로드 중...");
-  FB.ref.once("value").then(function(snap){
+  FB.rootRef.once("value").then(function(snap){
     var remote=snap.val();
     if(!remote){notify("원격 데이터 없음","info");setDot("err","비어있음");return;}
-    applyRemoteData(remote);
+    // v1/v2 자동 감지
+    if(remote.data&&!remote.months)applyRemoteDataLegacy(remote.data);
+    else applyRemoteDataV2(remote);
     setDot("ok","로드 완료");
     notify("원격 데이터 재로드 완료","ok");
   }).catch(function(err){
@@ -4787,10 +5136,10 @@ function fbReloadFromRemote(){
 
 // 내 로컬 → 원격 강제 업로드
 function fbPushLocalOverwrite(){
-  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  if(!FB.rootRef){notify("Firebase 미연결","warn");return;}
   if(!confirm("⚠️ 내 로컬 데이터를 Firebase에 강제 업로드하여 모든 공동 사용자의 현재 데이터를 덮어씁니다.\n\n다른 사람이 최근에 편집한 내용이 사라질 수 있습니다.\n\n계속하시겠습니까?"))return;
   setDot("busy","업로드 중...");
-  pushToFirebase().then(function(ok){
+  pushAllToFirebaseV2().then(function(ok){
     if(ok){notify("원격 덮어쓰기 완료","ok");setDot("ok","동기화됨");}
     else{notify("업로드 실패","warn");setDot("err","실패");}
   });
@@ -4798,10 +5147,11 @@ function fbPushLocalOverwrite(){
 
 // Firebase 전체 삭제
 function fbClearAll(){
-  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  if(!FB.rootRef){notify("Firebase 미연결","warn");return;}
   if(!confirm("⚠️ Firebase의 모든 공유 데이터를 삭제합니다.\n\n모든 공동 사용자의 앱이 빈 상태로 초기화됩니다.\n다음 구글시트 동기화 시 다시 채워집니다.\n\n정말로 삭제하시겠습니까?"))return;
   if(!confirm("마지막 확인: 정말 전체 삭제하시겠습니까?"))return;
-  FB.ref.remove().then(function(){
+  FB.rootRef.remove().then(function(){
+    _monthHashes={};_globalHashes={};
     notify("Firebase 전체 삭제 완료","ok");
   }).catch(function(err){notify("삭제 실패: "+err.message,"warn");});
 }
@@ -4860,7 +5210,7 @@ function renderCfgGSheet(){
   h+='<div class="cfg-section-title" style="margin-top:18px">🧭 사용 방법</div>';
   h+='<ol style="font-size:12px;color:#555;line-height:1.8;padding-left:20px">';
   h+='<li>구글시트 하단에 <b>월별 탭</b> 만들기 — 탭 이름은 <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px">2025-01</code> / <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px">2025년 1월</code> / <code style="background:#f5f5f5;padding:1px 5px;border-radius:3px">202501</code> 모두 자동 인식</li>';
-  h+='<li>각 탭 첫 행에 헤더 (캠퍼스, 사번, 성명, 직급, 기본급 등)</li>';
+  h+='<li>각 탭 첫 행에 헤더 (캠퍼스, 사번, 성명, 직책, 기본급 등)</li>';
   h+='<li>두 번째 행부터 직원 Raw 데이터 붙여넣기</li>';
   h+='<li>HTML 새로고침 → 자동으로 모든 탭이 월별로 반영됨 (5분 쿨다운, 강제 재동기화는 헤더 "새로고침" 버튼)</li>';
   h+='</ol>';
@@ -4972,20 +5322,20 @@ function showCampusColorPicker(campusName){
 function setCampusColor(name,color){if(!color)return;CAMPUS_C[name]={hd:color};render();}
 
 function renderCfgGrade(){
-  var h='<div class="cfg-section-title">🏅 직급 체계</div>';
-  h+='<div style="font-size:11px;color:#888;margin-bottom:12px">직급 이름과 색상을 관리합니다.</div>';
+  var h='<div class="cfg-section-title">🏅 직책 체계</div>';
+  h+='<div style="font-size:11px;color:#888;margin-bottom:12px">직책 이름과 색상을 관리합니다.</div>';
   Object.keys(GRADE_C).forEach(function(g){
     var gc=GRADE_C[g];var cnt=getAllEmployees().filter(function(e){return e.grade===g;}).length;
     h+='<div class="cfg-row"><div style="width:14px;height:14px;border-radius:50%;background:'+gc.tx+';flex-shrink:0"></div><div class="cfg-name" style="color:'+gc.tx+'">'+esc(g)+'</div><div style="font-size:10px;color:#aaa">'+cnt+'명</div>';
     h+='<div class="cfg-actions"><button class="cfg-btn sm" onclick="showRenameGrade(\''+esc(g)+'\')">✏️</button><button class="cfg-btn sm danger" onclick="deleteGrade(\''+esc(g)+'\')">🗑</button></div></div>';
   });
-  h+='<div class="cfg-add-row"><input id="cfg_new_grade" placeholder="새 직급 이름" onkeydown="if(event.key===\'Enter\')addGrade()"><button class="cfg-btn pri" onclick="addGrade()">+ 추가</button></div>';
+  h+='<div class="cfg-add-row"><input id="cfg_new_grade" placeholder="새 직책 이름" onkeydown="if(event.key===\'Enter\')addGrade()"><button class="cfg-btn pri" onclick="addGrade()">+ 추가</button></div>';
   return h;
 }
 
-function showRenameGrade(oldName){var nm=prompt("직급 이름 변경:",oldName);if(!nm||!nm.trim()||nm===oldName)return;nm=nm.trim();pushUndo("직급 이름 변경");Object.keys(MONTHS_DATA).forEach(function(mk){var md=MONTHS_DATA[mk];if(!md||!md.deptData)return;md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){if(e.grade===oldName)e.grade=nm;});});});});var val=GRADE_C[oldName];GRADE_C[nm]=val;delete GRADE_C[oldName];render();notify(oldName+" → "+nm,"ok");}
-function addGrade(){var el=document.getElementById("cfg_new_grade");var nm=(el?el.value:"").trim();if(!nm){notify("직급 이름 입력","warn");return;}if(GRADE_C[nm]){notify("이미 있는 직급","warn");return;}var used=Object.values(GRADE_C).map(function(c){return c.tx;});var newC=COLOR_PALETTE.find(function(c){return used.indexOf(c)<0;})||"#607D8B";GRADE_C[nm]={tx:newC};render();notify(nm+" 추가","ok");}
-function deleteGrade(name){var cnt=getAllEmployees().filter(function(e){return e.grade===name;}).length;if(!confirm(name+" 삭제? 해당 직원 "+cnt+"명 직급 초기화"))return;pushUndo("직급 삭제");Object.keys(MONTHS_DATA).forEach(function(mk){var md=MONTHS_DATA[mk];if(!md||!md.deptData)return;md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){if(e.grade===name)e.grade="";});});});});delete GRADE_C[name];render();notify(name+" 삭제","warn");}
+function showRenameGrade(oldName){var nm=prompt("직책 이름 변경:",oldName);if(!nm||!nm.trim()||nm===oldName)return;nm=nm.trim();pushUndo("직책 이름 변경");Object.keys(MONTHS_DATA).forEach(function(mk){var md=MONTHS_DATA[mk];if(!md||!md.deptData)return;md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){if(e.grade===oldName)e.grade=nm;});});});});var val=GRADE_C[oldName];GRADE_C[nm]=val;delete GRADE_C[oldName];render();notify(oldName+" → "+nm,"ok");}
+function addGrade(){var el=document.getElementById("cfg_new_grade");var nm=(el?el.value:"").trim();if(!nm){notify("직책 이름 입력","warn");return;}if(GRADE_C[nm]){notify("이미 있는 직책","warn");return;}var used=Object.values(GRADE_C).map(function(c){return c.tx;});var newC=COLOR_PALETTE.find(function(c){return used.indexOf(c)<0;})||"#607D8B";GRADE_C[nm]={tx:newC};render();notify(nm+" 추가","ok");}
+function deleteGrade(name){var cnt=getAllEmployees().filter(function(e){return e.grade===name;}).length;if(!confirm(name+" 삭제? 해당 직원 "+cnt+"명 직책 초기화"))return;pushUndo("직책 삭제");Object.keys(MONTHS_DATA).forEach(function(mk){var md=MONTHS_DATA[mk];if(!md||!md.deptData)return;md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){if(e.grade===name)e.grade="";});});});});delete GRADE_C[name];render();notify(name+" 삭제","warn");}
 
 function renderCfgSystem(){
   var st=getStats();var allRaw=0;Object.keys(MONTHS_DATA).forEach(function(m){allRaw+=(MONTHS_DATA[m].rawRecords||[]).length;});
@@ -5014,7 +5364,7 @@ function resetAllData(){if(!confirm("모든 데이터를 삭제합니다. 계속
 // ===== CSV =====
 function exportCSV(){
   var all=getAllEmployees();
-  var rows=[["이름","직급","고용형태","캠퍼스","팀","사번","입사일","기본급","식대","연장수당","공제합계","차인지급액","연락처"]];
+  var rows=[["이름","직책","고용형태","캠퍼스","팀","사번","입사일","기본급","식대","연장수당","공제합계","차인지급액","연락처"]];
   all.forEach(function(e){rows.push([e.name,e.grade||"",e.gubn||"",e.campus,e.team,e.empId||"",e.joinDate||"",e.basePay||"",e.food||"",e.overTime||"",e.deduct||"",e.netPay||"",e.phone||""]);});
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"';}).join(",");}).join("\n");
   var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=curMonth+"_인사현황.csv";a.click();URL.revokeObjectURL(url);notify("CSV 다운로드","ok");
@@ -5084,7 +5434,7 @@ function renderMaternity(){
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
   h+='<table style="width:100%;border-collapse:collapse;font-size:11px">';
   h+='<thead><tr style="background:#FCE4EC">';
-  ["#","성명","캠퍼스","직급","고용형태","종류","시작일","종료일","기간","D-day","사번/비고","액션"].forEach(function(c){
+  ["#","성명","캠퍼스","직책","고용형태","종류","시작일","종료일","기간","D-day","사번/비고","액션"].forEach(function(c){
     h+='<th style="padding:7px 10px;text-align:left;font-weight:700;color:#880E4F;border-bottom:2px solid #F48FB1">'+c+'</th>';
   });
   h+='</tr></thead><tbody>';
@@ -5132,7 +5482,7 @@ function showAddMaternity(){
   h+='<div class="modal-row"><div class="field"><label>성명</label><input id="mat_name" placeholder="홍길동"></div><div class="field"><label>캠퍼스</label><select id="mat_campus">';
   DD().campuses.forEach(function(cp){h+='<option value="'+esc(cp.name)+'">'+esc(cp.name)+'</option>';});
   h+='</select></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>직급</label><select id="mat_grade">';
+  h+='<div class="modal-row"><div class="field"><label>직책</label><select id="mat_grade">';
   Object.keys(GRADE_C).forEach(function(g){h+='<option value="'+g+'">'+g+'</option>';});
   h+='</select></div><div class="field"><label>종류</label><select id="mat_cat"><option value="육단">육단</option><option value="육휴">육휴</option><option value="출산">출산</option><option value="휴직">휴직</option></select></div></div>';
   h+='<div class="modal-row"><div class="field"><label>시작일</label><input id="mat_start" placeholder="2025-01-01"></div><div class="field"><label>종료일</label><input id="mat_end" placeholder="2026-01-01"></div></div>';
@@ -5146,7 +5496,7 @@ function editMaternity(idx){
   h+='<div class="modal-row"><div class="field"><label>성명</label><input id="mat_name" value="'+esc(r.name)+'"></div><div class="field"><label>캠퍼스</label><select id="mat_campus">';
   DD().campuses.forEach(function(cp){h+='<option value="'+esc(cp.name)+'"'+(cp.name===r.campus?" selected":"")+'>'+esc(cp.name)+'</option>';});
   h+='</select></div></div>';
-  h+='<div class="modal-row"><div class="field"><label>직급</label><select id="mat_grade">';
+  h+='<div class="modal-row"><div class="field"><label>직책</label><select id="mat_grade">';
   Object.keys(GRADE_C).forEach(function(g){h+='<option value="'+g+'"'+(g===r.grade?" selected":"")+'>'+g+'</option>';});
   h+='</select></div><div class="field"><label>종류</label><select id="mat_cat">';
   ["육단","육휴","출산","휴직"].forEach(function(c){h+='<option value="'+c+'"'+(c===r.category?" selected":"")+'>'+c+'</option>';});
@@ -5166,7 +5516,7 @@ function doSaveMaternity(){
 function deleteMaternity(idx){if(!D().maternityRecords)return;if(!confirm("삭제?"))return;D().maternityRecords.splice(idx,1);render();notify("삭제","warn");}
 function exportMaternityCSV(){
   var recs=D().maternityRecords||[];if(!recs.length){notify("데이터 없음","warn");return;}
-  var rows=[["성명","캠퍼스","직급","구분","종류","시작일","종료일","사번/비고"]];
+  var rows=[["성명","캠퍼스","직책","구분","종류","시작일","종료일","사번/비고"]];
   recs.forEach(function(r){rows.push([r.name,r.campus,r.grade,r.gubn,r.category,r.startDate,r.endDate,r.empId||r.rawName||""]);});
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c||"").replace(/"/g,'""')+'"';}).join(",");}).join("\n");
   var blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});var url=URL.createObjectURL(blob);var a=document.createElement("a");a.href=url;a.download=curMonth+"_모성보호.csv";a.click();URL.revokeObjectURL(url);
@@ -5237,7 +5587,7 @@ function renderPayDiff(){
   h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;overflow:hidden">';
   h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;white-space:nowrap">';
   h+='<thead><tr style="background:#f5f5f5"><th style="padding:6px 10px;text-align:left;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">#</th>';
-  ["성명","캠퍼스","직급","구분","변동유형","전월기본급","당월기본급","기본급변동","전월실지급","당월실지급","실지급변동","증감률"].forEach(function(c){h+='<th style="padding:6px 10px;text-align:right;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';});
+  ["성명","캠퍼스","직책","구분","변동유형","전월기본급","당월기본급","기본급변동","전월실지급","당월실지급","실지급변동","증감률"].forEach(function(c){h+='<th style="padding:6px 10px;text-align:right;font-weight:700;color:#666;border-bottom:2px solid #e0e0e0">'+c+'</th>';});
   h+='</tr></thead><tbody>';
   var typeC={"신규입사":"#1565C0","퇴직처리":"#757575","기본급변동":"#F57F17","실지급변동":"#880E4F"};
   rows.forEach(function(r,i){
@@ -5270,7 +5620,7 @@ function exportPayDiffCSV(){
   var curEmps=getAllEmployees();var prevMd=MONTHS_DATA[prevKey];var prevEmps=[];
   prevMd.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){(t.employees||[]).forEach(function(e){prevEmps.push(Object.assign({campus:cp.name},e));});});});
   var prevMap={};prevEmps.forEach(function(e){prevMap[e.name]=e;});
-  var rows=[["성명","캠퍼스","직급","고용형태","변동유형","전월기본급","당월기본급","기본급변동","전월실지급","당월실지급","실지급변동","증감률"]];
+  var rows=[["성명","캠퍼스","직책","고용형태","변동유형","전월기본급","당월기본급","기본급변동","전월실지급","당월실지급","실지급변동","증감률"]];
   curEmps.forEach(function(e){
     var p=prevMap[e.name];var pb=p?p.basePay||0:0;var pn=p?p.netPay||0:0;
     var db=(e.basePay||0)-pb;var dn=(e.netPay||0)-pn;if(db===0&&dn===0&&p)return;
@@ -5317,34 +5667,63 @@ var FB_DB="";var FB_PATH="";
 function setDot(type,msg){var el=document.getElementById("fbDot");if(!el)return;var colors={ok:"rgba(76,175,80,.85)",busy:"rgba(255,152,0,.85)",err:"rgba(244,67,54,.85)"};el.style.background=colors[type]||"rgba(255,255,255,.15)";el.textContent="● "+msg;}
 
 // ===== Firebase 초기화 & 실시간 동기화 =====
+// ===== Firebase 분할 저장 v2 =====
+// 경로 구조:
+//   polyhr/meta/              — 스키마 버전, 마지막 동기화 시점
+//   polyhr/months/{YYYY-MM}/  — 각 월 독립 저장 (변경된 월만 업로드)
+//   polyhr/adminCards/        — 관리자 인사카드
+//   polyhr/retiredManagers/   — 퇴직 관리자 목록
+//   polyhr/adminComments/     — 관리자 코멘트
+//   polyhr/settings/          — CAMPUS_C, GRADE_C, hiddenMonths 등
+//   polyhr/history/           — 변경 이력
+//
+// 변경 추적: _monthHashes[monthKey] = lastHash, _globalHashes = {cards, retired, ...}
+// 업로드 시 해시 비교해서 바뀐 것만 set()
+
+var _monthHashes={};// monthKey → last uploaded hash
+var _globalHashes={};// {adminCards, retiredManagers, adminComments, settings, history}
+
 function initFirebase(){
   if(typeof firebase==="undefined"){setDot("err","SDK 없음");return;}
   try{
     FB.clientId=Math.random().toString(36).slice(2,12)+Date.now();
     FB.app=firebase.initializeApp(FIREBASE_CONFIG);
     FB.db=firebase.database();
-    FB.ref=FB.db.ref("polyhr/data");
+    FB.rootRef=FB.db.ref("polyhr");
+    FB.ref=FB.rootRef;// 하위 호환
     setDot("busy","연결 중...");
-    // 실시간 리스너 — 누군가 원격에서 바꾸면 자동 반영
-    FB.ref.on("value",function(snapshot){
-      var remote=snapshot.val();
+
+    // 초기 데이터 로드 — 한 번만 전체 읽어서 로컬 채우기
+    FB.rootRef.once("value").then(function(snap){
+      var remote=snap.val();
       FB.ready=true;
-      if(!remote){
-        // DB가 비어있음 — 로컬 데이터를 처음 업로드
+
+      // v1 포맷 감지 (data 노드 아래에 전체 통째) → 마이그레이션
+      if(remote&&remote.data&&!remote.months){
+        notify("v2 포맷으로 마이그레이션 중...","info");
+        applyRemoteDataLegacy(remote.data);
+        // 마이그레이션 후 v2 경로에 다시 저장
+        pushAllToFirebaseV2().then(function(){
+          // v1 경로 삭제
+          FB.db.ref("polyhr/data").remove();
+          notify("마이그레이션 완료","ok");
+        });
+      }else if(!remote||(!remote.months&&!remote.meta)){
+        // DB 비어있음 — 로컬 데이터를 v2 포맷으로 업로드
         setDot("ok","초기화");
-        pushToFirebase();
-        return;
+        pushAllToFirebaseV2();
+      }else{
+        // v2 포맷 정상 데이터
+        applyRemoteDataV2(remote);
+        setDot("ok","동기화됨");
       }
-      // 자기가 방금 쓴 데이터가 콜백으로 돌아온 경우 완전 스킵 (버벅임 방지)
-      if(remote.lastPushBy===FB.clientId){
-        setDot("ok","동기화됨");return;
-      }
-      applyRemoteData(remote);
-      setDot("ok","동기화됨");
-    },function(err){
-      console.error("Firebase error:",err);
-      setDot("err","연결 실패");
-      notify("Firebase 연결 실패: "+err.message,"warn");
+
+      // 리스너 등록 — 각 경로 독립
+      setupFirebaseListeners();
+    }).catch(function(err){
+      console.error("Firebase initial load error:",err);
+      setDot("err","로드 실패");
+      notify("Firebase 초기 로드 실패: "+err.message,"warn");
     });
   }catch(e){
     console.error("Firebase init error:",e);
@@ -5353,10 +5732,265 @@ function initFirebase(){
   }
 }
 
-// 원격 데이터를 로컬에 반영
-function applyRemoteData(remote){
+// 경로별 독립 리스너 — 변경된 경로만 이벤트 받음
+function setupFirebaseListeners(){
+  if(!FB.rootRef)return;
+
+  // 월별 리스너 — months 노드 전체를 한 번에 리스닝 (자식 추가/변경/삭제 개별 이벤트)
+  var monthsRef=FB.rootRef.child("months");
+  monthsRef.on("child_added",function(snap){onMonthRemoteChange(snap.key,snap.val());});
+  monthsRef.on("child_changed",function(snap){onMonthRemoteChange(snap.key,snap.val());});
+  monthsRef.on("child_removed",function(snap){onMonthRemoteRemoved(snap.key);});
+
+  // 전역 데이터 리스너들
+  FB.rootRef.child("adminCards").on("value",function(snap){onGlobalRemoteChange("adminCards",snap.val());});
+  FB.rootRef.child("retiredManagers").on("value",function(snap){onGlobalRemoteChange("retiredManagers",snap.val());});
+  FB.rootRef.child("adminComments").on("value",function(snap){onGlobalRemoteChange("adminComments",snap.val());});
+  FB.rootRef.child("settings").on("value",function(snap){onGlobalRemoteChange("settings",snap.val());});
+  FB.rootRef.child("history").on("value",function(snap){onGlobalRemoteChange("history",snap.val());});
+}
+
+// 원격에서 특정 월 변경 → 로컬에 반영
+function onMonthRemoteChange(monthKey,data){
+  if(!data||!data._by)return;
+  // 자기가 방금 쓴 거면 스킵
+  if(data._by===FB.clientId)return;
   FB.applyingRemote=true;
-  invalidateTimelineCache();// 원격 데이터 받을 때마다 타임라인 캐시 무효화
+  try{
+    // _by, _at 메타필드 제거
+    var cleanData={deptData:data.deptData||{campuses:[]},rawRecords:data.rawRecords||[],inoutRecords:data.inoutRecords||[],maternityRecords:data.maternityRecords||[]};
+    MONTHS_DATA[monthKey]=cleanData;
+    ensureMonthStructure(monthKey);
+    _monthHashes[monthKey]=hashMonth(monthKey);
+    invalidateTimelineCache();
+    rebuildRetiredEmployees();
+    renderMonthBar();render();
+    setDot("ok","동기화됨 ("+monthKey+")");
+  }finally{FB.applyingRemote=false;}
+}
+
+function onMonthRemoteRemoved(monthKey){
+  FB.applyingRemote=true;
+  try{
+    delete MONTHS_DATA[monthKey];
+    delete _monthHashes[monthKey];
+    if(curMonth===monthKey){
+      var keys=Object.keys(MONTHS_DATA).sort(monthCompare);
+      curMonth=keys.length?keys[keys.length-1]:curMonth;
+    }
+    invalidateTimelineCache();
+    rebuildRetiredEmployees();
+    renderMonthBar();render();
+  }finally{FB.applyingRemote=false;}
+}
+
+// 원격 전역 데이터 변경 → 로컬 반영
+function onGlobalRemoteChange(key,data){
+  if(!data)return;
+  if(data._by===FB.clientId)return;
+  FB.applyingRemote=true;
+  try{
+    if(key==="adminCards"){
+      GLOBAL_ADMIN_CARDS=data._payload||data||{};
+      delete GLOBAL_ADMIN_CARDS._by;delete GLOBAL_ADMIN_CARDS._at;
+    }else if(key==="retiredManagers"){
+      GLOBAL_RETIRED_MANAGERS=data._payload||[];
+    }else if(key==="adminComments"){
+      GLOBAL_ADMIN_COMMENTS=data._payload||data||{};
+      delete GLOBAL_ADMIN_COMMENTS._by;delete GLOBAL_ADMIN_COMMENTS._at;
+    }else if(key==="settings"){
+      if(data.CAMPUS_C){Object.keys(CAMPUS_C).forEach(function(k){delete CAMPUS_C[k];});Object.assign(CAMPUS_C,data.CAMPUS_C);}
+      if(data.GRADE_C){Object.keys(GRADE_C).forEach(function(k){delete GRADE_C[k];});Object.assign(GRADE_C,data.GRADE_C);}
+      if(data.hiddenMonths)hiddenMonths=data.hiddenMonths;
+      if(data.monthColors)monthColors=data.monthColors;
+    }else if(key==="history"){
+      state.history=data._payload||[];
+    }
+    _globalHashes[key]=hashGlobal(key);
+    render();
+  }finally{FB.applyingRemote=false;}
+}
+
+// 월 데이터 해시 (빠른 변경 감지)
+function hashMonth(monthKey){
+  var md=MONTHS_DATA[monthKey];if(!md)return "";
+  try{
+    var cnt=0;(md.deptData&&md.deptData.campuses||[]).forEach(function(cp){cp.teams.forEach(function(t){cnt+=(t.employees||[]).length;});});
+    return monthKey+":"+cnt+":"+(md.rawRecords||[]).length+":"+(md.inoutRecords||[]).length+":"+(md.maternityRecords||[]).length+":"+JSON.stringify(md.deptData||{}).length;
+  }catch(e){return String(Date.now());}
+}
+
+// 전역 해시
+function hashGlobal(key){
+  try{
+    if(key==="adminCards")return JSON.stringify(GLOBAL_ADMIN_CARDS||{}).length+"";
+    if(key==="retiredManagers")return (GLOBAL_RETIRED_MANAGERS||[]).length+"";
+    if(key==="adminComments")return JSON.stringify(GLOBAL_ADMIN_COMMENTS||{}).length+"";
+    if(key==="settings")return JSON.stringify({CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,hiddenMonths:hiddenMonths,monthColors:monthColors}).length+"";
+    if(key==="history")return (state.history||[]).length+"";
+  }catch(e){}
+  return "";
+}
+
+// 전체 업로드 (초기화 시 or 마이그레이션)
+function pushAllToFirebaseV2(){
+  if(!FB.rootRef)return Promise.resolve(false);
+  var tasks=[];
+  // meta
+  tasks.push(FB.rootRef.child("meta").set({version:CONFIG.VERSION,schemaVersion:2,updatedAt:new Date().toISOString(),updatedBy:FB.clientId}));
+  // 각 월
+  Object.keys(MONTHS_DATA).forEach(function(mk){
+    var md=MONTHS_DATA[mk];
+    tasks.push(FB.rootRef.child("months/"+fbSafeKey(mk)).set(Object.assign({},md,{_by:FB.clientId,_at:Date.now()})));
+    _monthHashes[mk]=hashMonth(mk);
+  });
+  // 전역들
+  tasks.push(FB.rootRef.child("adminCards").set({_payload:GLOBAL_ADMIN_CARDS,_by:FB.clientId,_at:Date.now()}));
+  tasks.push(FB.rootRef.child("retiredManagers").set({_payload:GLOBAL_RETIRED_MANAGERS,_by:FB.clientId,_at:Date.now()}));
+  tasks.push(FB.rootRef.child("adminComments").set({_payload:GLOBAL_ADMIN_COMMENTS,_by:FB.clientId,_at:Date.now()}));
+  tasks.push(FB.rootRef.child("settings").set({CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,hiddenMonths:hiddenMonths,monthColors:monthColors,_by:FB.clientId,_at:Date.now()}));
+  tasks.push(FB.rootRef.child("history").set({_payload:state.history,_by:FB.clientId,_at:Date.now()}));
+  _globalHashes.adminCards=hashGlobal("adminCards");
+  _globalHashes.retiredManagers=hashGlobal("retiredManagers");
+  _globalHashes.adminComments=hashGlobal("adminComments");
+  _globalHashes.settings=hashGlobal("settings");
+  _globalHashes.history=hashGlobal("history");
+  return Promise.all(tasks).then(function(){return true;}).catch(function(err){
+    console.error("Firebase push all error:",err);return false;
+  });
+}
+
+// Firebase 경로에 안전한 키 변환 (. $ # [ ] / 제거)
+function fbSafeKey(s){return String(s).replace(/[\.\$#\[\]\/]/g,"_");}
+
+// 변경된 것만 업로드 (diff 기반)
+function pushChangedToFirebase(){
+  if(!FB.rootRef||FB.applyingRemote)return Promise.resolve(false);
+  if(!FB.clientId)FB.clientId=Math.random().toString(36).slice(2,12)+Date.now();
+
+  var tasks=[];
+  var changes=[];
+
+  // 각 월 변경 확인
+  Object.keys(MONTHS_DATA).forEach(function(mk){
+    var curHash=hashMonth(mk);
+    if(_monthHashes[mk]!==curHash){
+      var md=MONTHS_DATA[mk];
+      tasks.push(FB.rootRef.child("months/"+fbSafeKey(mk)).set(Object.assign({},md,{_by:FB.clientId,_at:Date.now()})));
+      _monthHashes[mk]=curHash;
+      changes.push("month:"+mk);
+    }
+  });
+
+  // 삭제된 월 처리
+  Object.keys(_monthHashes).forEach(function(mk){
+    if(!MONTHS_DATA[mk]){
+      tasks.push(FB.rootRef.child("months/"+fbSafeKey(mk)).remove());
+      delete _monthHashes[mk];
+      changes.push("delete:"+mk);
+    }
+  });
+
+  // 전역 변경 확인
+  var ch=hashGlobal("adminCards");
+  if(_globalHashes.adminCards!==ch){
+    tasks.push(FB.rootRef.child("adminCards").set({_payload:GLOBAL_ADMIN_CARDS,_by:FB.clientId,_at:Date.now()}));
+    _globalHashes.adminCards=ch;changes.push("adminCards");
+  }
+  ch=hashGlobal("retiredManagers");
+  if(_globalHashes.retiredManagers!==ch){
+    tasks.push(FB.rootRef.child("retiredManagers").set({_payload:GLOBAL_RETIRED_MANAGERS,_by:FB.clientId,_at:Date.now()}));
+    _globalHashes.retiredManagers=ch;changes.push("retired");
+  }
+  ch=hashGlobal("adminComments");
+  if(_globalHashes.adminComments!==ch){
+    tasks.push(FB.rootRef.child("adminComments").set({_payload:GLOBAL_ADMIN_COMMENTS,_by:FB.clientId,_at:Date.now()}));
+    _globalHashes.adminComments=ch;changes.push("comments");
+  }
+  ch=hashGlobal("settings");
+  if(_globalHashes.settings!==ch){
+    tasks.push(FB.rootRef.child("settings").set({CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,hiddenMonths:hiddenMonths,monthColors:monthColors,_by:FB.clientId,_at:Date.now()}));
+    _globalHashes.settings=ch;changes.push("settings");
+  }
+  ch=hashGlobal("history");
+  if(_globalHashes.history!==ch){
+    tasks.push(FB.rootRef.child("history").set({_payload:state.history,_by:FB.clientId,_at:Date.now()}));
+    _globalHashes.history=ch;changes.push("history");
+  }
+
+  if(!tasks.length)return Promise.resolve(true);// 변경 없음
+
+  return Promise.all(tasks).then(function(){
+    // localStorage 백업 (전체 스냅샷)
+    try{
+      localStorage.setItem("hr_poly_data",JSON.stringify({
+        months:MONTHS_DATA,history:state.history,hiddenMonths:hiddenMonths,monthColors:monthColors,
+        curMonth:curMonth,CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,
+        adminCards:GLOBAL_ADMIN_CARDS,retiredManagers:GLOBAL_RETIRED_MANAGERS,adminComments:GLOBAL_ADMIN_COMMENTS,
+        gasUrl:GAS_URL,gsheetView:GSHEET_VIEW_URL
+      }));
+    }catch(e){}
+    return true;
+  }).catch(function(err){
+    console.error("Firebase push changed error:",err);
+    return false;
+  });
+}
+
+// v2 데이터 적용 (초기 로드 시)
+function applyRemoteDataV2(remote){
+  FB.applyingRemote=true;
+  invalidateTimelineCache();
+  try{
+    // 월별 데이터
+    if(remote.months){
+      Object.keys(MONTHS_DATA).forEach(function(k){delete MONTHS_DATA[k];});
+      Object.keys(remote.months).forEach(function(k){
+        var md=remote.months[k];
+        // _by, _at 메타필드 제거
+        MONTHS_DATA[k]={
+          deptData:md.deptData||{campuses:[]},
+          rawRecords:md.rawRecords||[],
+          inoutRecords:md.inoutRecords||[],
+          maternityRecords:md.maternityRecords||[]
+        };
+        _monthHashes[k]=hashMonth(k);
+      });
+    }
+    // 전역
+    if(remote.adminCards){GLOBAL_ADMIN_CARDS=remote.adminCards._payload||remote.adminCards||{};delete GLOBAL_ADMIN_CARDS._by;delete GLOBAL_ADMIN_CARDS._at;}
+    if(remote.retiredManagers){GLOBAL_RETIRED_MANAGERS=remote.retiredManagers._payload||(Array.isArray(remote.retiredManagers)?remote.retiredManagers:[]);}
+    if(remote.adminComments){GLOBAL_ADMIN_COMMENTS=remote.adminComments._payload||remote.adminComments||{};delete GLOBAL_ADMIN_COMMENTS._by;delete GLOBAL_ADMIN_COMMENTS._at;}
+    if(remote.settings){
+      var s=remote.settings;
+      if(s.CAMPUS_C){Object.keys(CAMPUS_C).forEach(function(k){delete CAMPUS_C[k];});Object.assign(CAMPUS_C,s.CAMPUS_C);}
+      if(s.GRADE_C){Object.keys(GRADE_C).forEach(function(k){delete GRADE_C[k];});Object.assign(GRADE_C,s.GRADE_C);}
+      if(s.hiddenMonths)hiddenMonths=s.hiddenMonths;
+      if(s.monthColors)monthColors=s.monthColors;
+    }
+    if(remote.history){state.history=remote.history._payload||(Array.isArray(remote.history)?remote.history:[]);}
+
+    // 전역 해시 기록
+    _globalHashes.adminCards=hashGlobal("adminCards");
+    _globalHashes.retiredManagers=hashGlobal("retiredManagers");
+    _globalHashes.adminComments=hashGlobal("adminComments");
+    _globalHashes.settings=hashGlobal("settings");
+    _globalHashes.history=hashGlobal("history");
+
+    Object.keys(MONTHS_DATA).forEach(function(mk){ensureMonthStructure(mk);});
+    rebuildRetiredEmployees();
+    if(!MONTHS_DATA[curMonth]){var ks=Object.keys(MONTHS_DATA);if(ks.length)curMonth=ks[ks.length-1];}
+    var el=document.getElementById("gsLink");if(el)el.href=GSHEET_VIEW_URL;
+    renderMonthBar();render();
+  }finally{
+    FB.applyingRemote=false;
+  }
+}
+
+// v1 레거시 데이터 적용 (마이그레이션 시 1회)
+function applyRemoteDataLegacy(remote){
+  FB.applyingRemote=true;
+  invalidateTimelineCache();
   try{
     if(remote.months){
       Object.keys(MONTHS_DATA).forEach(function(k){delete MONTHS_DATA[k];});
@@ -5370,62 +6004,29 @@ function applyRemoteData(remote){
     if(remote.GRADE_C){Object.keys(GRADE_C).forEach(function(k){delete GRADE_C[k];});Object.assign(GRADE_C,remote.GRADE_C);}
     if(remote.adminCards)GLOBAL_ADMIN_CARDS=remote.adminCards;
     if(remote.retiredManagers)GLOBAL_RETIRED_MANAGERS=remote.retiredManagers;
-    if(remote.gasUrl)GAS_URL=remote.gasUrl;
-    if(remote.gsheetView)GSHEET_VIEW_URL=remote.gsheetView;
-    // 모든 월 데이터 구조 자동 복구 (Firebase에서 손상된 데이터 대비)
+    if(remote.adminComments)GLOBAL_ADMIN_COMMENTS=remote.adminComments;
     Object.keys(MONTHS_DATA).forEach(function(mk){ensureMonthStructure(mk);});
-    // curMonth가 사라진 월이면 기본값으로
-    if(!MONTHS_DATA[curMonth]){
-      var keys=Object.keys(MONTHS_DATA);
-      if(keys.length)curMonth=keys[keys.length-1];
-    }
-    // localStorage도 백업 업데이트
-    try{localStorage.setItem("hr_poly_data",JSON.stringify(remote));}catch(e){}
-    // 헤더 시트 링크 재설정
-    var el=document.getElementById("gsLink");if(el)el.href=GSHEET_VIEW_URL;
+    rebuildRetiredEmployees();
     renderMonthBar();render();
-  }finally{
-    FB.applyingRemote=false;
-  }
+  }finally{FB.applyingRemote=false;}
 }
 
-// 로컬 변경사항을 Firebase에 업로드
-function pushToFirebase(){
-  if(!FB.ref||FB.applyingRemote)return Promise.resolve(false);
-  if(!FB.clientId)FB.clientId=Math.random().toString(36).slice(2,12)+Date.now();
-  var data={
-    months:MONTHS_DATA,history:state.history,hiddenMonths:hiddenMonths,
-    monthColors:monthColors,curMonth:curMonth,CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,
-    adminCards:GLOBAL_ADMIN_CARDS,retiredManagers:GLOBAL_RETIRED_MANAGERS,
-    gasUrl:GAS_URL,gsheetView:GSHEET_VIEW_URL,
-    savedAt:new Date().toISOString(),
-    lastPushAt:Date.now(),
-    lastPushBy:FB.clientId
-  };
-  FB.lastPushAt=Date.now();
-  return FB.ref.set(data).then(function(){
-    try{localStorage.setItem("hr_poly_data",JSON.stringify(data));}catch(e){}
-    return true;
-  }).catch(function(err){
-    console.error("Firebase push error:",err);
-    return false;
-  });
-}
-
-// 하위 호환 — 기존 fbPut 호출하는 코드는 pushToFirebase로 라우팅
-function fbPut(data){return pushToFirebase();}
+// 하위 호환
+function applyRemoteData(remote){applyRemoteDataV2(remote);}
+function pushToFirebase(){return pushChangedToFirebase();}
+function fbPut(data){return pushChangedToFirebase();}
 
 function scheduleSave(){
-  if(FB.applyingRemote)return;// 원격 데이터 반영 중엔 저장 스킵 (루프 방지)
+  if(FB.applyingRemote)return;
   setDot("busy","저장중...");clearTimeout(_saveTimer);
   _saveTimer=setTimeout(function(){
     if(_isSaving){scheduleSave();return;}_isSaving=true;
-    invalidateTimelineCache();// 로컬 변경 시 캐시 무효화
-    pushToFirebase().then(function(ok){
+    invalidateTimelineCache();
+    pushChangedToFirebase().then(function(ok){
       setDot(ok?"ok":"err",ok?"동기화됨":"실패");
       _isSaving=false;
     });
-  },3000);// 3초 디바운스 (렌더 부하 대폭 감소)
+  },CONFIG.FB_DEBOUNCE_MS);
 }
 
 // 로컬 저장 로드
@@ -5443,6 +6044,7 @@ function scheduleSave(){
       // 전역 인사카드/퇴직 복원 (없으면 월별 데이터에서 마이그레이션)
       if(d.adminCards)GLOBAL_ADMIN_CARDS=d.adminCards;
       if(d.retiredManagers)GLOBAL_RETIRED_MANAGERS=d.retiredManagers;
+      if(d.adminComments)GLOBAL_ADMIN_COMMENTS=d.adminComments;
       // 공용계정 이전 자동 마이그레이션:
       // 예전 개인계정 URL이 localStorage에 남아있어도 무시하고 코드상수(신규 공용계정) 우선
       var OLD_GAS_URLS=[
@@ -5460,6 +6062,8 @@ function scheduleSave(){
         if(md.adminCards){Object.keys(md.adminCards).forEach(function(k){if(!GLOBAL_ADMIN_CARDS[k])GLOBAL_ADMIN_CARDS[k]=md.adminCards[k];});delete md.adminCards;}
         if(md.retiredManagers){md.retiredManagers.forEach(function(r){if(!GLOBAL_RETIRED_MANAGERS.some(function(x){return x.name===r.name;}))GLOBAL_RETIRED_MANAGERS.push(r);});delete md.retiredManagers;}
       });
+      // 퇴사자 재구축 (inoutRecords 기반 자동 감지)
+      rebuildRetiredEmployees();
       setDot("ok","로컬저장");
     }
   }catch(e){}
@@ -5474,9 +6078,9 @@ function _computeDataHash(){
       JSON.stringify(state.history||[]).length+"|"+
       JSON.stringify(GLOBAL_ADMIN_CARDS||{}).length+"|"+
       JSON.stringify(GLOBAL_RETIRED_MANAGERS||[]).length+"|"+
+      JSON.stringify(GLOBAL_ADMIN_COMMENTS||{}).length+"|"+
       curMonth+"|"+
       Object.keys(hiddenMonths||{}).join(",")+"|"+
-      // 각 월의 직원 총 수 (구조 변경 감지)
       Object.keys(MONTHS_DATA).map(function(mk){
         var md=MONTHS_DATA[mk];if(!md||!md.deptData)return 0;
         var cnt=0;md.deptData.campuses.forEach(function(cp){cp.teams.forEach(function(t){cnt+=(t.employees||[]).length;});});
@@ -5489,10 +6093,11 @@ render=function(){
   _renderTimer=requestAnimationFrame(function(){
     _renderTimer=null;
     _origRender();
-    // 데이터 해시가 바뀐 경우에만 저장 트리거 (탭 전환만 한 경우는 저장 스킵)
+    // 데이터 해시가 바뀐 경우에만 저장 트리거
     var newHash=_computeDataHash();
     if(_lastDataHash!==null&&_lastDataHash!==newHash){
       invalidateTimelineCache();
+      rebuildRetiredEmployees();// 데이터 변경 시 퇴사자 목록도 재구축
       scheduleSave();
     }
     _lastDataHash=newHash;
