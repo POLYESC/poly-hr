@@ -3018,7 +3018,7 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
   // 2단계: GSheet 동기화일 때만 "시트에 없는 기존 _source:GSheet 데이터 제거"
   if(sourceTag==="GSheet"){
     // [마이그레이션] _source 플래그 없는 모든 기존 데이터를 GSheet 출처로 간주
-    // ("+ 직원 추가"로 수동 생성 시 _source="manual"을 명시 — 그것만 보호됨)
+    // (수동 생성은 _source="manual" 명시해야만 보호됨)
     target.rawRecords.forEach(function(r){if(!r._source)r._source="GSheet";});
     target.deptData.campuses.forEach(function(cp){
       cp.teams.forEach(function(t){
@@ -3026,8 +3026,7 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
       });
     });
 
-    // sheetNames에는 원본+정제 이름 모두 이미 담겨 있음 (parsed.name도 add)
-    // 이름 매칭 헬퍼
+    // sheetNames에는 원본+정제 이름 모두 담겨 있음
     function inSheet(name){
       if(!name)return false;
       if(sheetNames[name])return true;
@@ -3036,33 +3035,47 @@ function ingestRows(targetMonth,rawRows,mapping,sourceTag){
       return false;
     }
 
+    // [특별 케이스] 시트가 완전히 빈 경우 — 해당 월 모든 GSheet/무플래그 데이터 전원 삭제
+    var isSheetEmpty=parsedRecs.length===0;
+
     // rawRecords 제거
     var keptRaws=[];
     target.rawRecords.forEach(function(r){
-      if(r._source==="GSheet"&&!inSheet(r.name)){removedCnt++;}
+      var shouldDelete=isSheetEmpty
+        ?r._source!=="manual"// 빈 시트 → manual만 보존
+        :r._source==="GSheet"&&!inSheet(r.name);// 일반 → GSheet 출처인데 시트에 없으면
+      if(shouldDelete){removedCnt++;}
       else keptRaws.push(r);
     });
     target.rawRecords=keptRaws;
 
-    // 직원 편성에서 제거 (rawRecords와 무관, sheetNames와 직접 비교)
+    // 직원 편성에서 제거 (sheetNames와 직접 비교)
     target.deptData.campuses.forEach(function(cp){
       cp.teams.forEach(function(t){
         t.employees=(t.employees||[]).filter(function(e){
-          if(e._source==="GSheet"&&!inSheet(e.name))return false;
-          return true;
+          var shouldDelete=isSheetEmpty
+            ?e._source!=="manual"
+            :e._source==="GSheet"&&!inSheet(e.name);
+          return !shouldDelete;
         });
       });
     });
 
     // inoutRecords 중 _fromRaw:true이면서 시트에 없는 이름 제거
     target.inoutRecords=target.inoutRecords.filter(function(r){
-      if(r._fromRaw&&!inSheet(r.name))return false;
+      if(r._fromRaw){
+        if(isSheetEmpty)return false;
+        if(!inSheet(r.name))return false;
+      }
       return true;
     });
 
     // maternityRecords도 동일
     target.maternityRecords=target.maternityRecords.filter(function(m){
-      if(m._fromRaw&&!inSheet(m.name))return false;
+      if(m._fromRaw){
+        if(isSheetEmpty)return false;
+        if(!inSheet(m.name))return false;
+      }
       return true;
     });
   }
@@ -3883,6 +3896,7 @@ function renderCfgGSheet(){
   h+='<a href="'+GSHEET_VIEW_URL+'" target="_blank" style="padding:6px 14px;background:#fff;color:#1565C0;border:1px solid #1565C0;border-radius:6px;font-size:12px;text-decoration:none;font-weight:600">🔗 시트 열기</a>';
   h+='<a href="'+GAS_URL+'" target="_blank" style="padding:6px 14px;background:#fff;color:#555;border:1px solid #ddd;border-radius:6px;font-size:12px;text-decoration:none;font-weight:600">🧪 API 응답 확인</a>';
   h+='<button onclick="showEditGSheetConfig()" style="padding:6px 14px;background:#fff;color:#555;border:1px solid #ddd;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">✏️ URL 변경</button>';
+  h+='<button onclick="hardResetFromSheet()" style="padding:6px 14px;background:#fff;color:#C62828;border:1px solid #ffcdd2;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700">🗑 전체 리셋 & 재동기화</button>';
   h+='</div></div>';
 
   // 동기화 상태
@@ -3949,6 +3963,33 @@ function doSaveGSheetConfig(){
   if(view)GSHEET_VIEW_URL=view;
   var el=document.getElementById("gsLink");if(el)el.href=GSHEET_VIEW_URL;
   scheduleSave();closeModal();render();notify("설정 저장 완료","ok");
+}
+
+// 전체 리셋 & 재동기화 — 구글시트 기반 데이터 완전 초기화 후 새로 받기
+// 수동 생성 직원(_source:manual)과 관리자 인사카드 / 캠퍼스 색상 / 캠퍼스 순서는 유지
+function hardResetFromSheet(){
+  if(!confirm("⚠️ 전체 리셋 & 재동기화를 진행합니다.\n\n• 구글시트에서 온 모든 데이터(Raw/캠퍼스 편성/입퇴사/모성보호) 완전 삭제\n• 수동 추가 직원은 유지\n• 관리자 인사카드·캠퍼스 설정은 유지\n• 마지막 동기화 기록 초기화 후 즉시 재동기화\n\n계속하시겠습니까?"))return;
+  pushUndo("전체 리셋 & 재동기화");
+  // 모든 월의 GSheet 기반 데이터 전면 삭제 (월 데이터 자체는 유지, 안의 내용만 비움)
+  Object.keys(MONTHS_DATA).forEach(function(mk){
+    var md=MONTHS_DATA[mk];if(!md)return;
+    // rawRecords: manual 이외 전부 제거
+    md.rawRecords=(md.rawRecords||[]).filter(function(r){return r._source==="manual";});
+    // 직원: manual 이외 전부 제거
+    (md.deptData.campuses||[]).forEach(function(cp){
+      (cp.teams||[]).forEach(function(t){
+        t.employees=(t.employees||[]).filter(function(e){return e._source==="manual";});
+      });
+    });
+    // 입퇴사/모성보호: _fromRaw=true 인 것 전부 제거
+    md.inoutRecords=(md.inoutRecords||[]).filter(function(r){return !r._fromRaw;});
+    md.maternityRecords=(md.maternityRecords||[]).filter(function(m){return !m._fromRaw;});
+  });
+  _gsSyncState.lastSync=0;
+  try{localStorage.removeItem("hr_last_gsync");}catch(e){}
+  renderMonthBar();render();scheduleSave();
+  notify("리셋 완료 — 재동기화 시작","info");
+  syncFromGoogleSheet();
 }
 
 // 시트에 없는 월 데이터 일괄 정리
