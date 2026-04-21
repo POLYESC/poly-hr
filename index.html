@@ -490,7 +490,17 @@ var state={tab:"overview",search:"",selected:null,campusFilter:"all",gradeFilter
 var _undoStack=[];
 var _cfgNav="campus";
 
-function D(){return MONTHS_DATA[curMonth];}
+function ensureMonthStructure(m){
+  if(!MONTHS_DATA[m])MONTHS_DATA[m]={deptData:{campuses:[]},rawRecords:[],inoutRecords:[],maternityRecords:[]};
+  var md=MONTHS_DATA[m];
+  if(!md.deptData)md.deptData={campuses:[]};
+  if(!md.deptData.campuses)md.deptData.campuses=[];
+  if(!md.rawRecords)md.rawRecords=[];
+  if(!md.inoutRecords)md.inoutRecords=[];
+  if(!md.maternityRecords)md.maternityRecords=[];
+  return md;
+}
+function D(){return ensureMonthStructure(curMonth);}
 function DD(){return D().deptData;}
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 function fmtN(n){if(!n&&n!==0)return"";return Number(n).toLocaleString();}
@@ -4504,6 +4514,7 @@ function setDot(type,msg){var el=document.getElementById("fbDot");if(!el)return;
 function initFirebase(){
   if(typeof firebase==="undefined"){setDot("err","SDK 없음");return;}
   try{
+    FB.clientId=Math.random().toString(36).slice(2,12)+Date.now();
     FB.app=firebase.initializeApp(FIREBASE_CONFIG);
     FB.db=firebase.database();
     FB.ref=FB.db.ref("polyhr/data");
@@ -4518,8 +4529,8 @@ function initFirebase(){
         pushToFirebase();
         return;
       }
-      // 자기가 방금 쓴 데이터가 콜백으로 돌아온 경우 스킵
-      if(remote.lastPushBy===FB.clientId&&remote.lastPushAt&&(Date.now()-remote.lastPushAt<2000)){
+      // 자기가 방금 쓴 데이터가 콜백으로 돌아온 경우 완전 스킵 (버벅임 방지)
+      if(remote.lastPushBy===FB.clientId){
         setDot("ok","동기화됨");return;
       }
       applyRemoteData(remote);
@@ -4554,6 +4565,13 @@ function applyRemoteData(remote){
     if(remote.retiredManagers)GLOBAL_RETIRED_MANAGERS=remote.retiredManagers;
     if(remote.gasUrl)GAS_URL=remote.gasUrl;
     if(remote.gsheetView)GSHEET_VIEW_URL=remote.gsheetView;
+    // 모든 월 데이터 구조 자동 복구 (Firebase에서 손상된 데이터 대비)
+    Object.keys(MONTHS_DATA).forEach(function(mk){ensureMonthStructure(mk);});
+    // curMonth가 사라진 월이면 기본값으로
+    if(!MONTHS_DATA[curMonth]){
+      var keys=Object.keys(MONTHS_DATA);
+      if(keys.length)curMonth=keys[keys.length-1];
+    }
     // localStorage도 백업 업데이트
     try{localStorage.setItem("hr_poly_data",JSON.stringify(remote));}catch(e){}
     // 헤더 시트 링크 재설정
@@ -4599,7 +4617,7 @@ function scheduleSave(){
       setDot(ok?"ok":"err",ok?"동기화됨":"실패");
       _isSaving=false;
     });
-  },600);// 600ms 디바운스 (실시간성 확보)
+  },2000);// 2초 디바운스 (드래그 연속 동작 중 저장 과다 방지)
 }
 
 // 로컬 저장 로드
