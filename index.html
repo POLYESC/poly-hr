@@ -232,6 +232,9 @@ body{font-family:"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif
 body.card-dragging .emp-item{pointer-events:none}
 body.card-dragging .emp-list{pointer-events:none}
 </style>
+<!-- Firebase v9 compat (전역 firebase 객체 노출 방식) -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body>
 
@@ -247,7 +250,7 @@ body.card-dragging .emp-list{pointer-events:none}
     <button class="hbtn" onclick="syncFromGoogleSheet()" title="구글시트 수동 동기화">&#9729; 새로고침</button>
     <a class="hbtn" id="gsLink" href="#" target="_blank" style="text-decoration:none" title="구글시트 열기">&#128196; 시트</a>
     <span id="gsStatus" style="font-size:10px;opacity:.85;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,.15);color:#fff;min-width:110px;text-align:center"></span>
-    <span id="fbDot" style="font-size:10px;opacity:.7;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,.15)">&#9679; 로컬</span>
+    <span id="fbDot" title="Firebase 실시간 동기화 상태" style="font-size:10px;opacity:.85;padding:3px 8px;border-radius:6px;background:rgba(255,255,255,.15);color:#fff;min-width:90px;text-align:center">&#9679; 연결 중...</span>
   </div>
 </div>
 
@@ -281,6 +284,18 @@ body.card-dragging .emp-list{pointer-events:none}
 <div class="ctx-menu" id="ctxMenu"></div>
 
 <script>
+// ===== Firebase (공용 실시간 동기화) =====
+var FIREBASE_CONFIG={
+  apiKey:"AIzaSyAhsLITEsnJbxSW9MmyexGS0z1Y48cLwDE",
+  authDomain:"poly-hr.firebaseapp.com",
+  databaseURL:"https://poly-hr-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId:"poly-hr",
+  storageBucket:"poly-hr.firebasestorage.app",
+  messagingSenderId:"640888444366",
+  appId:"1:640888444366:web:86ec49f70db47e75f3879f"
+};
+// Firebase 상태
+var FB={app:null,db:null,ref:null,ready:false,applyingRemote:false,localDirty:false,lastPushAt:0,lastPullAt:0};
 // ===== 구글시트 (Apps Script Web App) 연동 설정 =====
 // Apps Script가 각 탭을 읽어 {탭이름: [[헤더],[행1],[행2],...]} 형식으로 반환함
 var GAS_URL="https://script.google.com/macros/s/AKfycbxt-JtW5ZsubUuZOelggYCRjXkLofynHxtYzLEOLl09sbvMButm3yIQSUQTwkDxV5JZ6w/exec";
@@ -3867,6 +3882,7 @@ var CFG_NAV=[
   {key:"campus",icon:"🏢",label:"캠퍼스 관리"},
   {key:"grade", icon:"🏅",label:"직급 체계"},
   {key:"gsheet",icon:"☁️",label:"구글시트 연동"},
+  {key:"firebase",icon:"🔥",label:"Firebase 동기화"},
   {key:"system",icon:"⚙️", label:"시스템 정보"}
 ];
 
@@ -3877,9 +3893,102 @@ function renderSettings(){
   if(_cfgNav==="campus")h+=renderCfgCampus();
   else if(_cfgNav==="grade")h+=renderCfgGrade();
   else if(_cfgNav==="gsheet")h+=renderCfgGSheet();
+  else if(_cfgNav==="firebase")h+=renderCfgFirebase();
   else h+=renderCfgSystem();
   h+='</div></div>';
   return h;
+}
+
+function renderCfgFirebase(){
+  var h='<div class="cfg-section-title">🔥 Firebase 실시간 동기화</div>';
+  h+='<div style="font-size:11px;color:#888;margin-bottom:12px">앱에서 편집한 모든 내용이 실시간으로 공유됩니다 (드래그 이동, 인사카드, 모성보호, 입퇴사 등).</div>';
+
+  h+='<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:8px;padding:12px 14px;margin-bottom:14px">';
+  h+='<div style="font-size:12px;font-weight:800;color:#E65100;margin-bottom:8px">📡 연결 상태</div>';
+  var stat=FB.ready?'<span style="color:#2E7D32">✓ 연결됨 (실시간 동기화 중)</span>':'<span style="color:#E65100">⏳ 연결 중...</span>';
+  h+='<div style="font-size:11px;line-height:1.8">';
+  h+='<div><b>상태:</b> '+stat+'</div>';
+  h+='<div><b>프로젝트 ID:</b> <code style="background:#fff;padding:2px 6px;border-radius:3px;font-size:10px">'+esc(FIREBASE_CONFIG.projectId||"(미설정)")+'</code></div>';
+  h+='<div><b>Database URL:</b> <code style="background:#fff;padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">'+esc(FIREBASE_CONFIG.databaseURL||"(미설정)")+'</code></div>';
+  if(FB.clientId)h+='<div><b>내 클라이언트 ID:</b> <code style="background:#fff;padding:2px 6px;border-radius:3px;font-size:10px">'+esc(FB.clientId.slice(0,16))+'...</code></div>';
+  h+='</div></div>';
+
+  // 설명
+  h+='<div class="cfg-section-title">📊 무엇이 공유되나요?</div>';
+  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:12px;line-height:1.9">';
+  h+='<div style="color:#2E7D32">✅ <b>공유되는 것</b> (모든 사용자가 실시간으로 같은 상태 공유)</div>';
+  h+='<div style="padding-left:20px;margin-bottom:10px;font-size:11px;color:#555">';
+  h+='• 구글시트 동기화 데이터 (Raw, 직원, 입퇴사, 모성보호)<br>';
+  h+='• 캠퍼스별 편성 (드래그 이동 포함)<br>';
+  h+='• 관리자 인사카드 편집 내용<br>';
+  h+='• 퇴직 관리자 목록<br>';
+  h+='• 수동 추가한 직원·입퇴사·모성보호 기록<br>';
+  h+='• 캠퍼스 색상·순서·직급 설정<br>';
+  h+='• 월 탭 숨김·색상 설정<br>';
+  h+='• 변경 이력';
+  h+='</div>';
+  h+='<div style="color:#888">❌ <b>공유되지 않는 것</b> (각자 브라우저 고유)</div>';
+  h+='<div style="padding-left:20px;font-size:11px;color:#888">';
+  h+='• 현재 선택한 탭·필터·검색어<br>';
+  h+='• Undo 스택';
+  h+='</div>';
+  h+='</div>';
+
+  // 관리 버튼
+  h+='<div class="cfg-section-title">🛠 관리</div>';
+  h+='<div style="background:#FFEBEE;border:1px solid #EF9A9A;border-radius:8px;padding:12px 14px;margin-bottom:14px">';
+  h+='<div style="font-size:12px;font-weight:800;color:#C62828;margin-bottom:8px">⚠️ 위험한 작업</div>';
+  h+='<div style="font-size:11px;color:#555;margin-bottom:8px">모든 공동 사용자의 데이터에 영향을 줍니다. 신중하게.</div>';
+  h+='<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  h+='<button onclick="fbReloadFromRemote()" style="padding:6px 14px;background:#1565C0;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">↻ 원격 데이터 다시 불러오기</button>';
+  h+='<button onclick="fbPushLocalOverwrite()" style="padding:6px 14px;background:#fff;color:#E65100;border:1px solid #FFB74D;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700">↑ 내 로컬 → 원격 덮어쓰기</button>';
+  h+='<button onclick="fbClearAll()" style="padding:6px 14px;background:#fff;color:#C62828;border:1px solid #ef9a9a;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:700">🗑 Firebase 데이터 전체 삭제</button>';
+  h+='</div>';
+  h+='</div>';
+
+  h+='<div style="font-size:10px;color:#aaa;line-height:1.6">';
+  h+='<b>🛡 보안 안내</b><br>';
+  h+='Firebase 접근 권한은 "URL 아는 사람 누구나 읽기·쓰기" 상태입니다 (8명 내부 사용 목적).<br>';
+  h+='Firebase URL은 추측 불가능한 긴 문자열이므로 의도적 공유가 없으면 외부 노출 없음.<br>';
+  h+='보안 강화 원할 시 Firebase Console에서 보안 규칙 수정 가능 (관리자 문의).';
+  h+='</div>';
+  return h;
+}
+
+// Firebase 원격 데이터 재로드
+function fbReloadFromRemote(){
+  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  setDot("busy","로드 중...");
+  FB.ref.once("value").then(function(snap){
+    var remote=snap.val();
+    if(!remote){notify("원격 데이터 없음","info");setDot("err","비어있음");return;}
+    applyRemoteData(remote);
+    setDot("ok","로드 완료");
+    notify("원격 데이터 재로드 완료","ok");
+  }).catch(function(err){
+    notify("로드 실패: "+err.message,"warn");setDot("err","실패");
+  });
+}
+
+// 내 로컬 → 원격 강제 업로드
+function fbPushLocalOverwrite(){
+  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  if(!confirm("⚠️ 내 로컬 데이터를 Firebase에 강제 업로드하여 모든 공동 사용자의 현재 데이터를 덮어씁니다.\n\n다른 사람이 최근에 편집한 내용이 사라질 수 있습니다.\n\n계속하시겠습니까?"))return;
+  setDot("busy","업로드 중...");
+  pushToFirebase().then(function(ok){
+    if(ok){notify("원격 덮어쓰기 완료","ok");setDot("ok","동기화됨");}
+    else{notify("업로드 실패","warn");setDot("err","실패");}
+  });
+}
+
+// Firebase 전체 삭제
+function fbClearAll(){
+  if(!FB.ref){notify("Firebase 미연결","warn");return;}
+  if(!confirm("⚠️ Firebase의 모든 공유 데이터를 삭제합니다.\n\n모든 공동 사용자의 앱이 빈 상태로 초기화됩니다.\n다음 구글시트 동기화 시 다시 채워집니다.\n\n정말로 삭제하시겠습니까?"))return;
+  if(!confirm("마지막 확인: 정말 전체 삭제하시겠습니까?"))return;
+  FB.ref.remove().then(function(){
+    notify("Firebase 전체 삭제 완료","ok");
+  }).catch(function(err){notify("삭제 실패: "+err.message,"warn");});
 }
 
 function renderCfgGSheet(){
@@ -4386,18 +4495,111 @@ function render(){
 
 // ===== 저장 =====
 var _saveTimer=null,_isSaving=false;
+// 레거시 슬롯 (하위 호환용, Firebase SDK 쓰므로 실제 사용 안 함)
 var FB_DB="";var FB_PATH="";
-function fbUrl(p){return FB_DB+FB_PATH+(p?"/"+p:"")+".json";}
-function fbPut(data){if(!FB_DB)return Promise.resolve(true);return fetch(fbUrl(""),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}).then(function(r){return r.ok;}).catch(function(){return false;});}
-function setDot(type,msg){var el=document.getElementById("fbDot");if(!el)return;var colors={ok:"rgba(76,175,80,.8)",busy:"rgba(255,152,0,.8)",err:"rgba(244,67,54,.8)"};el.style.background=colors[type]||"rgba(255,255,255,.15)";el.textContent="● "+msg;}
+
+function setDot(type,msg){var el=document.getElementById("fbDot");if(!el)return;var colors={ok:"rgba(76,175,80,.85)",busy:"rgba(255,152,0,.85)",err:"rgba(244,67,54,.85)"};el.style.background=colors[type]||"rgba(255,255,255,.15)";el.textContent="● "+msg;}
+
+// ===== Firebase 초기화 & 실시간 동기화 =====
+function initFirebase(){
+  if(typeof firebase==="undefined"){setDot("err","SDK 없음");return;}
+  try{
+    FB.app=firebase.initializeApp(FIREBASE_CONFIG);
+    FB.db=firebase.database();
+    FB.ref=FB.db.ref("polyhr/data");
+    setDot("busy","연결 중...");
+    // 실시간 리스너 — 누군가 원격에서 바꾸면 자동 반영
+    FB.ref.on("value",function(snapshot){
+      var remote=snapshot.val();
+      FB.ready=true;
+      if(!remote){
+        // DB가 비어있음 — 로컬 데이터를 처음 업로드
+        setDot("ok","초기화");
+        pushToFirebase();
+        return;
+      }
+      // 자기가 방금 쓴 데이터가 콜백으로 돌아온 경우 스킵
+      if(remote.lastPushBy===FB.clientId&&remote.lastPushAt&&(Date.now()-remote.lastPushAt<2000)){
+        setDot("ok","동기화됨");return;
+      }
+      applyRemoteData(remote);
+      setDot("ok","동기화됨");
+    },function(err){
+      console.error("Firebase error:",err);
+      setDot("err","연결 실패");
+      notify("Firebase 연결 실패: "+err.message,"warn");
+    });
+  }catch(e){
+    console.error("Firebase init error:",e);
+    setDot("err","초기화 실패");
+    notify("Firebase 초기화 실패: "+e.message,"warn");
+  }
+}
+
+// 원격 데이터를 로컬에 반영
+function applyRemoteData(remote){
+  FB.applyingRemote=true;
+  try{
+    if(remote.months){
+      Object.keys(MONTHS_DATA).forEach(function(k){delete MONTHS_DATA[k];});
+      Object.keys(remote.months).forEach(function(k){MONTHS_DATA[k]=remote.months[k];});
+    }
+    if(remote.history)state.history=remote.history;
+    if(remote.hiddenMonths)hiddenMonths=remote.hiddenMonths;
+    if(remote.monthColors)monthColors=remote.monthColors;
+    if(remote.curMonth&&MONTHS_DATA[remote.curMonth])curMonth=remote.curMonth;
+    if(remote.CAMPUS_C){Object.keys(CAMPUS_C).forEach(function(k){delete CAMPUS_C[k];});Object.assign(CAMPUS_C,remote.CAMPUS_C);}
+    if(remote.GRADE_C){Object.keys(GRADE_C).forEach(function(k){delete GRADE_C[k];});Object.assign(GRADE_C,remote.GRADE_C);}
+    if(remote.adminCards)GLOBAL_ADMIN_CARDS=remote.adminCards;
+    if(remote.retiredManagers)GLOBAL_RETIRED_MANAGERS=remote.retiredManagers;
+    if(remote.gasUrl)GAS_URL=remote.gasUrl;
+    if(remote.gsheetView)GSHEET_VIEW_URL=remote.gsheetView;
+    // localStorage도 백업 업데이트
+    try{localStorage.setItem("hr_poly_data",JSON.stringify(remote));}catch(e){}
+    // 헤더 시트 링크 재설정
+    var el=document.getElementById("gsLink");if(el)el.href=GSHEET_VIEW_URL;
+    renderMonthBar();render();
+  }finally{
+    FB.applyingRemote=false;
+  }
+}
+
+// 로컬 변경사항을 Firebase에 업로드
+function pushToFirebase(){
+  if(!FB.ref||FB.applyingRemote)return Promise.resolve(false);
+  if(!FB.clientId)FB.clientId=Math.random().toString(36).slice(2,12)+Date.now();
+  var data={
+    months:MONTHS_DATA,history:state.history,hiddenMonths:hiddenMonths,
+    monthColors:monthColors,curMonth:curMonth,CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,
+    adminCards:GLOBAL_ADMIN_CARDS,retiredManagers:GLOBAL_RETIRED_MANAGERS,
+    gasUrl:GAS_URL,gsheetView:GSHEET_VIEW_URL,
+    savedAt:new Date().toISOString(),
+    lastPushAt:Date.now(),
+    lastPushBy:FB.clientId
+  };
+  FB.lastPushAt=Date.now();
+  return FB.ref.set(data).then(function(){
+    try{localStorage.setItem("hr_poly_data",JSON.stringify(data));}catch(e){}
+    return true;
+  }).catch(function(err){
+    console.error("Firebase push error:",err);
+    return false;
+  });
+}
+
+// 하위 호환 — 기존 fbPut 호출하는 코드는 pushToFirebase로 라우팅
+function fbPut(data){return pushToFirebase();}
 
 function scheduleSave(){
+  if(FB.applyingRemote)return;// 원격 데이터 반영 중엔 저장 스킵 (루프 방지)
   setDot("busy","저장중...");clearTimeout(_saveTimer);
   _saveTimer=setTimeout(function(){
     if(_isSaving){scheduleSave();return;}_isSaving=true;
-    var data={months:MONTHS_DATA,history:state.history,hiddenMonths:hiddenMonths,monthColors:monthColors,curMonth:curMonth,CAMPUS_C:CAMPUS_C,GRADE_C:GRADE_C,adminCards:GLOBAL_ADMIN_CARDS,retiredManagers:GLOBAL_RETIRED_MANAGERS,gasUrl:GAS_URL,gsheetView:GSHEET_VIEW_URL,savedAt:new Date().toISOString()};
-    fbPut(data).then(function(ok){setDot(ok?"ok":"err",ok?"저장됨":"로컬");_isSaving=false;try{localStorage.setItem("hr_poly_data",JSON.stringify(data));}catch(e){}});
-  },1000);
+    pushToFirebase().then(function(ok){
+      setDot(ok?"ok":"err",ok?"동기화됨":"실패");
+      _isSaving=false;
+    });
+  },600);// 600ms 디바운스 (실시간성 확보)
 }
 
 // 로컬 저장 로드
@@ -4444,6 +4646,10 @@ renderMonthBar();
 // 헤더 구글시트 링크 초기화
 (function(){var el=document.getElementById("gsLink");if(el)el.href=GSHEET_VIEW_URL;})();
 render();
+
+// Firebase 연결 (최우선 — 원격 데이터가 있으면 로컬을 덮어씀)
+setTimeout(initFirebase,200);
+
 // 첫 진입시 자동 동기화 (5분 이내 재요청은 스킵)
 (function autoSyncOnLoad(){
   if(!GAS_URL)return;
@@ -4456,7 +4662,8 @@ render();
       _gsSyncState.lastSync=last;
       updateGSheetStatus();
     }else{
-      syncFromGoogleSheet({silent:true});
+      // Firebase가 먼저 연결되어 원격 데이터 받은 뒤 GSheet 동기화 (약 1.5초 후)
+      setTimeout(function(){syncFromGoogleSheet({silent:true});},1500);
     }
   },600);
   // 1분마다 상태 표시 업데이트 (몇분 전 표시용)
