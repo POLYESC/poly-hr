@@ -4,10 +4,34 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>폴리 인사관리 시스템</title>
 <style>
+/* ===== 디자인 토큰 — 일관된 컬러 팔레트 ===== */
+:root{
+  /* 브랜드 */
+  --brand:#1a3a5c;
+  --brand-light:#2c5282;
+  /* 시맨틱 컬러 */
+  --accent-primary:#1565C0;   /* 파랑 — 주요 정보·집계·기본급 */
+  --accent-success:#2E7D32;   /* 초록 — 재직·정상·실지급 */
+  --accent-warning:#F57F17;   /* 주황 — 경고·편차·주의 */
+  --accent-danger:#C62828;    /* 빨강 — 퇴사·위험·오류 */
+  --accent-purple:#6A1B9A;    /* 보라 — 이력·이벤트·특수 */
+  --accent-teal:#00838F;      /* 청록 — 조직·관계 */
+  /* 중성 */
+  --bg:#f3f4f6;
+  --bg-card:#fff;
+  --bg-muted:#f8f9fa;
+  --bg-muted2:#f5f5f5;
+  --border:#e0e0e0;
+  --border-light:#f0f0f0;
+  --text:#1a1a1a;
+  --text-muted:#666;
+  --text-faint:#888;
+  --text-very-faint:#aaa;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;background:#f3f4f6;color:#1a1a1a;font-size:12px;display:flex;flex-direction:column;height:100vh}
+body{font-family:"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;background:var(--bg);color:var(--text);font-size:12px;display:flex;flex-direction:column;height:100vh}
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-thumb{background:#ccc;border-radius:3px}
-.header{background:linear-gradient(135deg,#1a3a5c 0%,#2c5282 100%);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;color:#fff}
+.header{background:linear-gradient(135deg,var(--brand) 0%,var(--brand-light) 100%);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;color:#fff}
 .header h1{font-size:15px;font-weight:800;letter-spacing:-.3px}
 .header .meta{font-size:9px;opacity:.7;margin-top:1px}
 .hdr-right{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -101,49 +125,12 @@ body{font-family:"Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif
 .pay-row:nth-child(odd){background:#fafafa}
 .pay-row:hover{background:#f0f4ff!important}
 .pay-hdr-row{background:#f5f5f5!important;font-weight:700;color:#999;font-size:8px;cursor:default;height:18px}
-/* Raw 업로드 */
-.upload-zone{border:2px dashed #c0ccda;border-radius:12px;padding:36px 20px;text-align:center;cursor:pointer;transition:all .2s;background:#fafbfc;margin-bottom:14px}
-.upload-zone:hover,.upload-zone.drag-active{border-color:#2196F3;background:#E3F2FD}
-.upload-zone input[type=file]{display:none}
-.upload-zone .uz-icon{font-size:32px;margin-bottom:8px;display:block}
-.upload-zone .uz-title{font-size:14px;font-weight:700;color:#333;margin-bottom:4px}
-.upload-zone .uz-sub{font-size:11px;color:#888}
-.col-map-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px}
-.col-map-table th{background:#f5f5f5;padding:5px 8px;text-align:left;font-weight:700;color:#666;border:1px solid #e0e0e0;font-size:10px}
-.col-map-table td{padding:4px 6px;border:1px solid #e8e8e8;vertical-align:middle}
-.col-map-table tr:nth-child(even) td{background:#fafafa}
-.col-map-table select{width:100%;padding:3px 4px;border:1px solid #ddd;border-radius:4px;font-size:10px;font-family:inherit}
-.preview-table-wrap{overflow-x:auto;max-height:260px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;margin-bottom:10px}
-.preview-table{width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap}
-.preview-table th{background:#1a3a5c;color:#fff;padding:4px 8px;position:sticky;top:0;z-index:1;font-weight:600;font-size:9px}
-.preview-table td{padding:3px 8px;border-bottom:1px solid #f0f0f0}
-.preview-table tr:hover td{background:#f0f4ff}
-.preview-table tr.new-row td{background:#E8F5E9}
-.preview-table tr.dup-row td{background:#FFF8E1}
-.preview-table tr.err-row td{background:#FFEBEE}
-.badge-new{background:#E8F5E9;color:#2E7D32;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px}
-.badge-dup{background:#FFF8E1;color:#F57F17;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px}
-.badge-update{background:#E3F2FD;color:#1565C0;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px}
-.badge-err{background:#FFEBEE;color:#C62828;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px}
+/* Raw 데이터 표시 (업로드 UI는 제거됨) */
 .raw-table-wrap{overflow-x:auto;max-height:420px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px}
 .raw-table{width:100%;border-collapse:collapse;font-size:10px;white-space:nowrap}
 .raw-table th{background:#f5f5f5;color:#555;padding:4px 8px;position:sticky;top:0;z-index:1;font-weight:700;font-size:9px;border-bottom:2px solid #e0e0e0}
 .raw-table td{padding:3px 8px;border-bottom:1px solid #f8f8f8}
 .raw-table tr:hover td{background:#f5f7ff}
-.step-bar{display:flex;align-items:center;gap:0;margin-bottom:16px;flex-wrap:wrap;gap:4px}
-.step-item{display:flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;font-size:11px;font-weight:600;color:#aaa;background:#f5f5f5;border:1px solid #e0e0e0}
-.step-item.active{background:#1a3a5c;color:#fff;border-color:#1a3a5c}
-.step-item.done{background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7}
-.step-arrow{font-size:13px;color:#ccc;margin:0 2px}
-.import-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
-.import-stat{border-radius:8px;padding:10px 12px;text-align:center}
-.import-stat .is-num{font-size:22px;font-weight:800;line-height:1.2}
-.import-stat .is-lbl{font-size:10px;font-weight:600;margin-top:2px}
-.tpl-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1px solid #ddd;border-radius:8px;background:#fff;font-size:12px;cursor:pointer;font-family:inherit;color:#555;transition:all .15s}
-.tpl-btn:hover{border-color:#2196F3;color:#2196F3;background:#E3F2FD}
-.opt-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding:10px 14px;background:#f8f9fa;border-radius:8px;border:1px solid #e8e8e8}
-.opt-row label{display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;font-weight:500}
-.opt-row select{padding:4px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:inherit}
 /* 입퇴사 */
 .inout-pill{padding:5px 16px;border-radius:20px;border:1.5px solid #ddd;background:#fff;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600;transition:all .15s}
 .inout-pill.in-on{background:#4CAF50;color:#fff;border-color:#4CAF50}
@@ -244,7 +231,7 @@ body.card-dragging .emp-list{pointer-events:none}
     <div class="meta" id="headerMeta"></div>
   </div>
   <div class="hdr-right">
-    <input class="search-box" id="searchBox" placeholder="&#128269; 이름·직책·캠퍼스 검색..." oninput="onSearch()">
+    <input class="search-box" id="searchBox" placeholder="&#128269; 이름·직책·캠퍼스 검색..." oncompositionstart="this.dataset._composing='1'" oncompositionend="this.dataset._composing='';onSearch(this)" oninput="onSearch(this)">
     <button class="hbtn" onclick="showAdvancedSearch()" title="고급 검색">&#9881; 필터</button>
     <button class="hbtn" id="advClearBtn" style="display:none;background:rgba(244,67,54,.25)" onclick="clearAdvSearch()" title="고급검색 해제">&#10005; 필터해제</button>
     <button class="hbtn" id="undoBtn" style="display:none" onclick="doUndo()">&#8634; 취소</button>
@@ -269,7 +256,6 @@ body.card-dragging .emp-list{pointer-events:none}
   <button class="tab" data-tab="dept" onclick="switchTab('dept')">&#128101; 캠퍼스별 편성</button>
   <button class="tab" data-tab="hrcard" onclick="switchTab('hrcard')">&#127970; 관리자 인사카드</button>
   <button class="tab" data-tab="personal" onclick="switchTab('personal')">&#128100; 개인 이력</button>
-  <button class="tab" data-tab="rawupload" onclick="switchTab('rawupload')">&#128228; Raw 업로드</button>
   <button class="tab" data-tab="rawdata" onclick="switchTab('rawdata')">&#128196; Raw 데이터</button>
   <button class="tab" data-tab="inout" onclick="switchTab('inout')">&#128338; 급여 특이사항</button>
   <button class="tab" data-tab="maternity" onclick="switchTab('maternity')">&#128118; 모성보호</button>
@@ -291,7 +277,7 @@ body.card-dragging .emp-list{pointer-events:none}
 // ⚙ CONFIG — 전체 시스템 설정 (매직 넘버 통합)
 // ============================================================
 var CONFIG={
-  VERSION:"v26",
+  VERSION:"v27",
   SCHEMA_VERSION:2,// Firebase 스키마 (1=통째, 2=분할)
 
   // Firebase
@@ -335,7 +321,19 @@ var CONFIG={
   MAX_MOVE_MATRIX_ROWS:30,
 
   // 퇴사사유 표준
-  LEAVE_REASONS:["자발적 퇴사","계약만료","권고사직","건강 사유","가정 사유","학업","은퇴","기타"]
+  LEAVE_REASONS:["자발적 퇴사","계약만료","권고사직","건강 사유","가정 사유","학업","은퇴","기타"],
+
+  // 디자인 컬러 팔레트 (JS에서 inline style 생성 시 사용)
+  // CSS 변수와 동일해야 함
+  COLOR:{
+    primary:"#1565C0",  // 주요 정보·집계
+    success:"#2E7D32",  // 재직·정상·실지급
+    warning:"#F57F17",  // 경고·편차
+    danger:"#C62828",   // 퇴사·위험
+    purple:"#6A1B9A",   // 이력·이벤트
+    teal:"#00838F",     // 조직·관계
+    brand:"#1a3a5c"
+  }
 };
 
 // ============================================================
@@ -589,32 +587,44 @@ function gubnHTML(g){
 
 function notify(m,t){var e=document.getElementById("notif");e.textContent=m;e.className="notif "+(t||"info");e.style.display="block";clearTimeout(e._t);e._t=setTimeout(function(){e.style.display="none";},3000);}
 function switchTab(t){state.tab=t;document.querySelectorAll("#mainTabs .tab").forEach(function(b){b.classList.toggle("on",b.dataset.tab===t);});render();}
-function onSearch(){state.search=document.getElementById("searchBox").value;render();}
+function onSearch(el){
+  el=el||document.getElementById("searchBox");
+  if(!el)return;
+  safeInputUpdate(el,function(v){state.search=v;});
+}
 
 // 한글 IME 조합 안전 헬퍼 — 자음/모음 조합 중에는 render 스킵
 // 사용법: oninput="safeInputUpdate(this,function(v){state.xxx=v;});"
-//        onkeydown="this.dataset.composing='1'"  (선택)
+// 한글 IME 조합 안전 헬퍼 — 디바운스로 render 지연해서 조합 깨짐 방지
+// 250ms 동안 추가 입력 없을 때에만 render() 실행
+// composition 중이면 render 건너뜀
+var _searchDebounceTimer=null;
 function safeInputUpdate(inputEl,setter){
-  // composition 중이면 상태 업데이트만 하고 render는 스킵
-  if(inputEl.dataset._composing==="1"){
-    setter(inputEl.value);
-    return;
-  }
+  // 상태는 즉시 반영 (검색어 저장)
   setter(inputEl.value);
-  // input의 위치 정보 보존
-  var sel=inputEl.selectionStart;
-  var id=inputEl.id;
-  render();
-  // 리렌더 후 같은 id의 input에 포커스 복원
-  requestAnimationFrame(function(){
-    var ne=document.getElementById(id);
-    if(ne&&ne!==inputEl){ne.focus();try{ne.setSelectionRange(sel,sel);}catch(e){}}
-  });
+  // 기존 디바운스 타이머 취소 — 추가 입력 들어온 경우
+  if(_searchDebounceTimer)clearTimeout(_searchDebounceTimer);
+  _searchDebounceTimer=setTimeout(function(){
+    _searchDebounceTimer=null;
+    // 여전히 조합 중이면 다음 기회로 미룸 (재호출 대기)
+    if(inputEl.dataset._composing==="1")return;
+    var sel=inputEl.selectionStart;
+    var id=inputEl.id;
+    render();
+    // 리렌더 후 포커스·커서 복원
+    requestAnimationFrame(function(){
+      var ne=document.getElementById(id);
+      if(ne&&ne!==inputEl){
+        ne.focus();
+        try{ne.setSelectionRange(sel,sel);}catch(e){}
+      }
+    });
+  },250);
 }
 
-// 한글 조합 이벤트 연결: oncompositionstart/end 핸들러
-// HTML에서 oncompositionstart="this.dataset._composing='1'"
-//       oncompositionend="this.dataset._composing='';safeInputUpdate(this,...)"
+// 한글 조합 이벤트 연결:
+//   oncompositionstart="this.dataset._composing='1'"
+//   oncompositionend="this.dataset._composing='';safeInputUpdate(this,setter)"
 
 function closeModal(){document.getElementById("modalBg").classList.remove("show");}
 
@@ -1641,7 +1651,7 @@ function renderMultiMonthCompare(selCp){
   }
   var sel=state.multiMonths;
 
-  var h='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #4527A0;border-radius:10px;padding:12px 14px;margin:18px 0">';
+  var h='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #6A1B9A;border-radius:10px;padding:12px 14px;margin:18px 0">';
   h+='<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">';
   h+='<span style="font-size:11px;font-weight:800;color:#4527A0">🔀 여러 월 동시 비교</span>';
   h+='<span style="font-size:9px;color:#888">월을 클릭해서 선택/해제 (최대 6개)</span>';
@@ -1858,7 +1868,7 @@ function renderWorkforceComposition(emps,selCp){
   }
   h+='</div>';
   // 국적 박스
-  h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;border-top:3px solid #558B2F;padding:12px 14px">';
+  h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;border-top:3px solid #2E7D32;padding:12px 14px">';
   h+='<div style="font-size:11px;font-weight:800;color:#558B2F;margin-bottom:8px">🌐 국적별 재직자 ('+natArr.length+'개국)</div>';
   if(!natArr.length){h+='<div style="font-size:11px;color:#aaa;padding:12px 0;text-align:center">데이터 없음</div>';}
   else{
@@ -2533,7 +2543,7 @@ function renderPayDeepDive(emps,selCp){
   h+='</div>';
 
   // (6) 동일 직책 내 급여 편차
-  h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;border-top:3px solid #880E4F;padding:12px 14px">';
+  h+='<div style="background:#fff;border-radius:10px;border:1px solid #e0e0e0;border-top:3px solid #C62828;padding:12px 14px">';
   h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📏 직책별 급여 편차 (같은 직책 내 차이)</div>';
   var gradeStats={};
   emps.forEach(function(e){
@@ -3132,153 +3142,6 @@ var AUTO_MAP={
   nationality:["국적","nationality","nation","country","country of origin","국가"]
 };
 
-var _uploadState={step:0,rawRows:[],headers:[],mapping:{},targetMonth:"",previewRows:[],importOpt:{dupMode:"update",syncEmp:true,createTeam:true}};
-
-function ensureXLSX(cb){if(window.XLSX){cb();return;}var s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";s.onload=cb;s.onerror=function(){notify("XLSX 라이브러리 로드 실패","warn");};document.head.appendChild(s);}
-
-function renderRawUpload(){
-  var s=_uploadState;
-  var steps=["① 파일 선택","② 컬럼 매핑","③ 미리보기","✓ 완료"];
-  var h='<div class="step-bar">';
-  steps.forEach(function(st,i){h+='<div class="step-item'+(i<s.step?" done":i===s.step?" active":"")+'">'+st+'</div>'+(i<steps.length-1?'<span class="step-arrow">›</span>':"");});
-  h+='</div>';
-  if(s.step===0)h+=renderUpStep0();
-  else if(s.step===1)h+=renderUpStep1();
-  else if(s.step===2)h+=renderUpStep2();
-  else h+=renderUpStep3();
-  return h;
-}
-
-function renderUpStep0(){
-  var monthOpts="";Object.keys(MONTHS_DATA).forEach(function(m){monthOpts+='<option value="'+esc(m)+'"'+(m===curMonth?" selected":"")+'>'+esc(m)+'</option>';});
-  var lastSyncText=_gsSyncState.lastSync?new Date(_gsSyncState.lastSync).toLocaleString("ko-KR"):"아직 동기화 전";
-  return'<div style="max-width:780px">'+
-  // 자동 동기화 안내 영역 (최상단)
-  '<div style="background:linear-gradient(135deg,#E3F2FD 0%,#E1F5FE 100%);border-radius:10px;padding:14px 16px;border:1.5px solid #90CAF9;margin-bottom:14px">'+
-    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'+
-      '<span style="font-size:16px">☁️</span>'+
-      '<span style="font-size:13px;font-weight:800;color:#0D47A1">구글시트 자동 동기화 (기본)</span>'+
-      '<span style="margin-left:auto;font-size:10px;color:#0D47A1">마지막 동기화: '+esc(lastSyncText)+(_gsSyncState.lastSynced?' · '+_gsSyncState.lastSynced+'개월':'')+'</span>'+
-    '</div>'+
-    '<div style="font-size:11px;color:#1565C0;line-height:1.6;margin-bottom:10px">'+
-      '구글시트에 <b>월별 탭</b>(예: <code style="background:#fff;padding:1px 5px;border-radius:3px">2025-01</code>, <code style="background:#fff;padding:1px 5px;border-radius:3px">2025년 2월</code>)을 만들고 Raw 데이터를 붙여넣으면 — 앱 열 때마다 <b>자동으로 모든 월이 동기화</b>됩니다.<br>월 데이터가 없는 탭이 새로 생기면 자동으로 월 탭이 추가되고, 기존 탭은 갱신됩니다.'+
-    '</div>'+
-    '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
-      '<a href="'+GSHEET_VIEW_URL+'" target="_blank" style="padding:6px 14px;background:#1565C0;color:#fff;border-radius:7px;font-size:12px;text-decoration:none;font-weight:700">🔗 구글시트 열기</a>'+
-      '<button onclick="syncFromGoogleSheet()" style="padding:6px 14px;border:none;border-radius:7px;background:#0D47A1;color:#fff;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">☁️ 지금 동기화</button>'+
-      '<button onclick="showGSheetLog()" style="padding:6px 14px;border:1px solid #90CAF9;background:#fff;color:#1565C0;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">📋 동기화 로그</button>'+
-    '</div>'+
-  '</div>'+
-  // 수동 엑셀 업로드 (접기, 비상시 백업 수단)
-  '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:12px;color:#666;padding:6px 0;font-weight:600">📂 또는 엑셀 파일로 직접 업로드 (비상 수단)</summary>'+
-  '<div style="padding-top:10px">'+
-    '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">'+
-    '<span style="font-size:11px;color:#888">양식 다운로드:</span>'+
-    '<button class="tpl-btn" onclick="downloadTemplate()">⬇ XLSX 양식</button>'+
-    '<button class="tpl-btn" onclick="downloadTemplateCsv()">⬇ CSV 양식</button>'+
-    '<span style="margin-left:12px;font-size:11px;color:#888">적재 대상 월:</span>'+
-    '<select id="up_month" style="padding:6px 10px;border:1px solid #ddd;border-radius:7px;font-size:12px;font-family:inherit">'+monthOpts+'</select>'+
-    '</div>'+
-    '<div class="upload-zone" id="dropZone" onclick="document.getElementById(\'fileInput\').click()" ondragover="uzDragOver(event)" ondragleave="uzDragLeave(event)" ondrop="uzDrop(event)">'+
-    '<input type="file" id="fileInput" accept=".xlsx,.xls,.csv" onchange="onFileSelect(event)">'+
-    '<span class="uz-icon">📂</span>'+
-    '<div class="uz-title">엑셀 파일 드래그 또는 클릭하여 업로드</div>'+
-    '<div class="uz-sub">.xlsx · .xls · .csv | 캠퍼스~차인지급액까지 전체 컬럼 지원</div>'+
-    '</div>'+
-    '<div style="background:#f8f9fa;border-radius:8px;padding:10px 14px;border:1px solid #e8e8e8;font-size:11px;color:#666">'+
-    '<b>파일 형식 안내</b><br>1행: 컬럼명 헤더 | 2행~: 데이터 | 숫자 쉼표·원 기호 자동 제거 | 사번·성명 자동 인식'+
-    '</div>'+
-  '</div></details>'+
-  '</div>';
-}
-
-function showGSheetLog(){
-  var info='<h2>☁️ 구글시트 동기화 상태</h2>';
-  info+='<div class="modal-section"><h3>연결 정보</h3>';
-  info+='<div style="font-size:11px;color:#666;margin-bottom:4px">Apps Script URL</div>';
-  info+='<div style="font-family:monospace;font-size:10px;background:#f5f5f5;padding:6px 8px;border-radius:4px;word-break:break-all;margin-bottom:8px">'+esc(GAS_URL)+'</div>';
-  info+='<div style="font-size:11px;color:#666;margin-bottom:4px">시트 보기 URL</div>';
-  info+='<div style="font-family:monospace;font-size:10px;background:#f5f5f5;padding:6px 8px;border-radius:4px;word-break:break-all">'+esc(GSHEET_VIEW_URL)+'</div></div>';
-  info+='<div class="modal-section"><h3>최근 동기화</h3>';
-  info+='<div style="font-size:12px;line-height:1.8">';
-  info+='<b>상태:</b> '+(_gsSyncState.inProgress?"⏳ 진행중":_gsSyncState.lastError?"❌ 실패":"✓ 정상")+'<br>';
-  info+='<b>마지막 동기화:</b> '+(_gsSyncState.lastSync?new Date(_gsSyncState.lastSync).toLocaleString("ko-KR"):"없음")+'<br>';
-  info+='<b>동기화된 월 수:</b> '+_gsSyncState.lastSynced+'<br>';
-  if(_gsSyncState.lastSkipped.length)info+='<b>인식 못한 탭:</b> <span style="color:#F57F17">'+esc(_gsSyncState.lastSkipped.join(", "))+'</span><br>';
-  if(_gsSyncState.lastError)info+='<b>오류 메시지:</b> <span style="color:#C62828">'+esc(_gsSyncState.lastError)+'</span>';
-  info+='</div></div>';
-  info+='<div class="modal-section"><h3>현재 로드된 월</h3>';
-  info+='<div style="font-size:11px">';
-  Object.keys(MONTHS_DATA).forEach(function(m){
-    var cnt=0;(MONTHS_DATA[m].deptData.campuses||[]).forEach(function(cp){cp.teams.forEach(function(t){cnt+=(t.employees||[]).length;});});
-    info+='<div style="padding:4px 8px;background:#f5f5f5;border-radius:4px;margin-bottom:3px"><b>'+esc(m)+'</b> — '+cnt+'명</div>';
-  });
-  info+='</div></div>';
-  info+='<div class="modal-btns"><button class="mbtn" onclick="closeModal()">닫기</button><button class="mbtn pri" onclick="closeModal();syncFromGoogleSheet()">☁️ 지금 동기화</button></div>';
-  document.getElementById("modalContent").innerHTML=info;document.getElementById("modalBg").classList.add("show");
-}
-
-function renderUpStep1(){
-  var s=_uploadState;
-  var h='<div style="max-width:720px"><div style="font-size:12px;color:#666;margin-bottom:10px">파일 컬럼을 시스템 필드에 매핑하세요. 자동 인식된 항목은 굵게 표시됩니다.</div>';
-  h+='<table class="col-map-table"><thead><tr><th>시스템 필드</th><th>파일 컬럼</th><th>샘플값</th></tr></thead><tbody>';
-  RAW_FIELDS.forEach(function(f){
-    var mapped=s.mapping[f.key];var isMapped=mapped!==undefined&&mapped>=0;
-    var bold=isMapped?'style="font-weight:700;color:#1a3a5c"':'';
-    h+='<tr><td '+bold+'>'+esc(f.label)+(f.required?' <span style="color:#E53935">*</span>':'')+'</td><td>';
-    h+='<select id="map_'+f.key+'" style="width:100%;padding:3px 5px;border:1px solid #ddd;border-radius:4px;font-size:10px;font-family:inherit"><option value="-1">— 사용안함 —</option>';
-    s.headers.forEach(function(hd,i){h+='<option value="'+i+'"'+(mapped===i?" selected":"")+'>'+esc(hd)+'</option>';});
-    h+='</select></td>';
-    var sv="";if(isMapped&&s.rawRows.length)sv=String(s.rawRows[0][mapped]||"").slice(0,14);
-    h+='<td style="font-size:9px;color:#888">'+esc(sv)+'</td></tr>';
-  });
-  h+='</tbody></table>';
-  h+='<div class="opt-row">';
-  h+='<label><input type="checkbox" id="opt_sync"'+(s.importOpt.syncEmp?" checked":"")+' onchange="_uploadState.importOpt.syncEmp=this.checked"> 직원 기본정보 동기화</label>';
-  h+='<label><input type="checkbox" id="opt_team"'+(s.importOpt.createTeam?" checked":"")+' onchange="_uploadState.importOpt.createTeam=this.checked"> 미존재 팀 자동 생성</label>';
-  h+='<label>중복: <select id="opt_dup" onchange="_uploadState.importOpt.dupMode=this.value"><option value="update">업데이트</option><option value="skip">건너뜀</option></select></label>';
-  h+='</div>';
-  h+='<div style="display:flex;gap:8px;justify-content:flex-end"><button class="mbtn" onclick="_uploadState.step=0;render()">← 파일 재선택</button><button class="mbtn pri" onclick="doPreview()">미리보기 →</button></div></div>';
-  return h;
-}
-
-function renderUpStep2(){
-  var s=_uploadState,rows=s.previewRows;
-  var cntN=rows.filter(function(r){return r._status==="new";}).length;
-  var cntU=rows.filter(function(r){return r._status==="update";}).length;
-  var cntS=rows.filter(function(r){return r._status==="skip";}).length;
-  var cntE=rows.filter(function(r){return r._status==="err";}).length;
-  var h='<div style="max-width:960px"><div class="import-summary">';
-  h+='<div class="import-stat" style="background:#E8F5E9"><div class="is-num" style="color:#2E7D32">'+cntN+'</div><div class="is-lbl" style="color:#2E7D32">신규 추가</div></div>';
-  h+='<div class="import-stat" style="background:#E3F2FD"><div class="is-num" style="color:#1565C0">'+cntU+'</div><div class="is-lbl" style="color:#1565C0">정보 업데이트</div></div>';
-  h+='<div class="import-stat" style="background:#FFF8E1"><div class="is-num" style="color:#F57F17">'+cntS+'</div><div class="is-lbl" style="color:#F57F17">중복 건너뜀</div></div>';
-  h+='<div class="import-stat" style="background:#FFEBEE"><div class="is-num" style="color:#C62828">'+cntE+'</div><div class="is-lbl" style="color:#C62828">오류</div></div>';
-  h+='</div>';
-  h+='<div class="preview-table-wrap"><table class="preview-table"><thead><tr>';
-  h+='<th>상태</th><th>캠퍼스</th><th>사번</th><th>구분</th><th>성명</th><th>직책</th><th>입사일</th><th>기본급</th><th>식대</th><th>연장수당</th><th>공제합계</th><th>차인지급액</th>';
-  h+='</tr></thead><tbody>';
-  rows.forEach(function(r){
-    var cls=r._status==="new"?"new-row":r._status==="update"?"":"dup-row";if(r._status==="err")cls="err-row";
-    var badge=r._status==="new"?'<span class="badge-new">신규</span>':r._status==="update"?'<span class="badge-update">업데이트</span>':r._status==="skip"?'<span class="badge-dup">중복</span>':'<span class="badge-err">오류</span>';
-    h+='<tr class="'+cls+'"><td>'+badge+'</td><td>'+esc(r.campus||"")+'</td><td style="color:#aaa">'+esc(r.empId||"")+'</td><td>'+esc(r.gubn||"")+'</td><td style="font-weight:700">'+esc(r.name||"")+'</td><td>'+esc(r.grade||"")+'</td><td style="color:#aaa">'+esc(r.joinDate||"")+'</td><td style="text-align:right">'+fmtN(r.basePay)+'</td><td style="text-align:right">'+fmtN(r.food)+'</td><td style="text-align:right">'+fmtN(r.overTime)+'</td><td style="text-align:right;color:#E53935">'+fmtN(r.deduct)+'</td><td style="text-align:right;font-weight:700;color:#1a3a5c">'+fmtN(r.netPay)+'</td></tr>';
-  });
-  h+='</tbody></table></div>';
-  h+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="mbtn" onclick="_uploadState.step=1;render()">← 매핑 수정</button><button class="mbtn pri" onclick="doImport()">✓ '+(cntN+cntU)+'건 DB 적재</button></div></div>';
-  return h;
-}
-
-function renderUpStep3(){
-  var s=_uploadState;
-  return'<div style="max-width:480px;text-align:center;padding:36px 20px">'+
-  '<div style="font-size:44px;margin-bottom:14px">✅</div>'+
-  '<div style="font-size:18px;font-weight:800;color:#1a3a5c;margin-bottom:6px">적재 완료!</div>'+
-  '<div style="font-size:13px;color:#666;margin-bottom:20px">'+esc(s.targetMonth)+'에 '+(s._importedCount||0)+'건이 저장되었습니다.</div>'+
-  '<div style="display:flex;gap:8px;justify-content:center">'+
-  '<button class="mbtn pri" onclick="_uploadState.step=0;render()">새 파일 업로드</button>'+
-  '<button class="mbtn" onclick="switchTab(\'rawdata\')">Raw 데이터 보기 →</button>'+
-  '</div></div>';
-}
-
 function renderRawData(){
   var recs=D().rawRecords||[];
   var h='<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">';
@@ -3340,36 +3203,6 @@ function renderRawData(){
   return h;
 }
 
-// 파일 처리
-function uzDragOver(e){e.preventDefault();var dz=document.getElementById("dropZone");if(dz)dz.classList.add("drag-active");}
-function uzDragLeave(){var dz=document.getElementById("dropZone");if(dz)dz.classList.remove("drag-active");}
-function uzDrop(e){e.preventDefault();var files=e.dataTransfer.files;if(files.length)processFile(files[0]);}
-function onFileSelect(e){if(e.target.files.length)processFile(e.target.files[0]);}
-
-function processFile(file){
-  _uploadState.targetMonth=document.getElementById("up_month")?document.getElementById("up_month").value:curMonth;
-  ensureXLSX(function(){
-    var reader=new FileReader();
-    reader.onload=function(e2){
-      try{
-        var data=new Uint8Array(e2.target.result);
-        var wb=XLSX.read(data,{type:"array",cellDates:true,raw:false});
-        var ws=wb.Sheets[wb.SheetNames[0]];
-        var json=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:false});
-        if(!json.length){notify("빈 파일","warn");return;}
-        var hi=0;
-        for(var i=0;i<Math.min(json.length,5);i++){if(json[i].some(function(c){return String(c).trim()!="";})){hi=i;break;}}
-        var headers=json[hi].map(function(c){return String(c).trim();});
-        var rows=json.slice(hi+1).filter(function(r){return r.some(function(c){return String(c).trim()!="";});});
-        if(rows.length>10000){rows=rows.slice(0,10000);notify("10,000행 초과 - 처음 10,000행만 처리","info");}
-        _uploadState.headers=headers;_uploadState.rawRows=rows;
-        _uploadState.mapping=autoMapCols(headers);
-        _uploadState.step=1;render();notify("로드 완료: "+rows.length+"행","ok");
-      }catch(err){notify("파싱 오류: "+err.message,"warn");}
-    };
-    reader.readAsArrayBuffer(file);
-  });
-}
 
 function autoMapCols(headers){
   var map={};RAW_FIELDS.forEach(function(f){map[f.key]=-1;});
@@ -3384,21 +3217,9 @@ function autoMapCols(headers){
   return map;
 }
 
-function doPreview(){
-  var m={};RAW_FIELDS.forEach(function(f){var sel=document.getElementById("map_"+f.key);m[f.key]=sel?parseInt(sel.value):-1;});
-  _uploadState.mapping=m;
-  var existing=D().rawRecords||[];var existMap={};existing.forEach(function(r){if(r.name)existMap[r.name.trim()]=r;});
-  var preview=[];
-  _uploadState.rawRows.forEach(function(row){
-    var rec=extractRawRow(row,m);
-    if(!rec.name){rec._status="err";preview.push(rec);return;}
-    rec.name=rec.name.trim();
-    rec._status=existMap[rec.name]?(_uploadState.importOpt.dupMode==="skip"?"skip":"update"):"new";
-    preview.push(rec);
-  });
-  _uploadState.previewRows=preview;_uploadState.step=2;render();
-}
+// ===== Raw 유틸 함수들 (ingestRows에서 사용) =====
 
+// 한 행의 각 셀을 RAW_FIELDS 키로 매핑해 객체로
 function extractRawRow(row,m){
   var r={};
   RAW_FIELDS.forEach(function(f){
@@ -3412,11 +3233,18 @@ function extractRawRow(row,m){
   return r;
 }
 
-function parsePayNum(s){if(s===""||s===null||s===undefined)return 0;var n=String(s).replace(/[,，원₩\s]/g,"");var v=parseFloat(n);return isNaN(v)?0:Math.round(v);}
+// 급여 숫자 파싱 — 쉼표·원 기호·공백 제거
+function parsePayNum(s){
+  if(s===""||s===null||s===undefined)return 0;
+  var n=String(s).replace(/[,，원₩\s]/g,"");
+  var v=parseFloat(n);
+  return isNaN(v)?0:Math.round(v);
+}
 
 // ===== 사번 특수값 처리 =====
 var INOUT_EMPID_KEYWORDS=["입사","퇴사","입퇴사"];
 var MATERNITY_EMPID_KEYWORDS=["휴직","육휴","출산","육단","복직/인상","전환"];
+
 // 직책→팀 자동분류 맵
 var GRADE_TEAM_MAP={
   "원장":"관리자","부원장":"관리자","본부장":"관리자",
@@ -3443,7 +3271,6 @@ function getAutoTeam(grade){
 // 날짜 파싱: 육단_25.03.04-26.03.03 또는 육휴_'25/03/04-'26/03/03 등
 function parseMaternityDates(raw){
   if(!raw)return{start:"",end:""};
-  // 패턴: YY.MM.DD-YY.MM.DD 또는 YY/MM/DD~YY/MM/DD 또는 YYYY-MM-DD 등
   var m=raw.match(/['']?(\d{2,4})[.\/-](\d{1,2})[.\/-](\d{1,2})\s*[-~]\s*['']?(\d{2,4})[.\/-](\d{1,2})[.\/-](\d{1,2})/);
   if(!m)return{start:"",end:""};
   function fy(y){return y.length===2?(parseInt(y)>=50?"19"+y:"20"+y):y;}
@@ -3451,6 +3278,7 @@ function parseMaternityDates(raw){
   var e=fy(m[4])+"-"+String(m[5]).padStart(2,"0")+"-"+String(m[6]).padStart(2,"0");
   return{start:s,end:e};
 }
+
 // 성명에서 이름 추출 (괄호, _ 구분)
 function parseRawName(fullName){
   if(!fullName)return{name:"",suffix:""};
@@ -3463,71 +3291,6 @@ function parseRawName(fullName){
   return{name:n,suffix:""};
 }
 
-function doImport(){
-  var s=_uploadState;
-  var rows=s.previewRows.filter(function(r){return r._status==="new"||r._status==="update";});
-  if(!rows.length){notify("적재할 데이터 없음","warn");return;}
-  pushUndo(s.targetMonth+" Raw 적재");
-  var target=MONTHS_DATA[s.targetMonth];if(!target){notify("대상 월 없음","warn");return;}
-  if(!target.rawRecords)target.rawRecords=[];
-  if(!target.inoutRecords)target.inoutRecords=[];
-  if(!target.maternityRecords)target.maternityRecords=[];
-  var existMap={};target.rawRecords.forEach(function(r,i){if(r.name)existMap[r.name.trim()]=i;});
-  var addedCnt=0,updatedCnt=0,inoutCnt=0,maternityCnt=0;
-  var now=new Date().toISOString();
-  rows.forEach(function(r){
-    var rec=Object.assign({},r);delete rec._status;rec._uploadedAt=now;rec._month=s.targetMonth;
-    var ei=existMap[rec.name];
-    if(ei!==undefined&&s.importOpt.dupMode==="update"){target.rawRecords[ei]=rec;updatedCnt++;}
-    else{target.rawRecords.push(rec);addedCnt++;existMap[rec.name]=target.rawRecords.length-1;}
-    if(s.importOpt.syncEmp)syncEmpFromRaw(rec,s.targetMonth,s.importOpt.createTeam);
-
-    // ① 입퇴사/인상 자동반영 (사번 키워드 체크)
-    var empIdStr=String(rec.empId||"").trim();
-    var isIn=empIdStr==="입사";var isOut=empIdStr==="퇴사";var isInOut=empIdStr==="입퇴사";
-    var isRaise=empIdStr==="인상"||empIdStr.indexOf("인상")>=0;
-    if(isIn||isOut||isInOut){
-      var nameClean=parseRawName(rec.name).name||rec.name;
-      var alreadyExists=target.inoutRecords.some(function(io){return io.name===nameClean&&io._fromRaw;});
-      if(!alreadyExists){
-        if(isIn||isInOut){
-          target.inoutRecords.push({type:"입사",date:rec.joinDate||s.targetMonth,name:nameClean,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:"Raw 자동반영",_fromRaw:true});inoutCnt++;
-        }
-        if(isOut||isInOut){
-          target.inoutRecords.push({type:"퇴사",date:rec.leaveDate||s.targetMonth,name:nameClean,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",memo:"Raw 자동반영",_fromRaw:true});inoutCnt++;
-        }
-      }
-    }
-    if(isRaise){
-      var nameCleanR=parseRawName(rec.name).name||rec.name;
-      var alreadyRaise=target.inoutRecords.some(function(io){return io.name===nameCleanR&&io.type==="인상"&&io._fromRaw;});
-      if(!alreadyRaise){
-        target.inoutRecords.push({type:"인상",date:rec.joinDate||s.targetMonth,name:nameCleanR,campus:rec.campus||"",team:rec._autoTeam||"",grade:rec.grade||"",gubn:rec.gubn||"",nationality:rec.nationality||"",remark:"Raw 자동반영",_fromRaw:true});inoutCnt++;
-      }
-    }
-
-    // ② 모성보호 자동반영 (사번 키워드)
-    var matKeywords=["휴직","육휴","출산","육단","복직","전환","육단_","출산_","휴직_"];
-    var isMat=matKeywords.some(function(k){return empIdStr.indexOf(k)>=0||String(rec.gubn||"").indexOf(k)>=0;});
-    if(!isMat&&rec.name){
-      var nm2=rec.name||"";isMat=/(육단|육휴|출산|휴직|모성)/.test(nm2);
-    }
-    if(isMat){
-      var nameRaw=rec.name||"";var parsed=parseRawName(nameRaw);
-      var dates=parseMaternityDates(parsed.suffix||nameRaw);
-      var catMatch=(parsed.suffix||nameRaw).match(/(육단|육휴|출산|휴직)/);
-      var cat=catMatch?catMatch[1]:"휴직";
-      var matName=parsed.name||nameRaw;
-      var already=target.maternityRecords.some(function(m){return m.name===matName;});
-      if(!already){
-        target.maternityRecords.push({name:matName,campus:rec.campus||"",grade:rec.grade||"",gubn:rec.gubn||"",category:cat,startDate:dates.start,endDate:dates.end,rawName:nameRaw,empId:empIdStr,_fromRaw:true,_uploadedAt:now});maternityCnt++;
-      }
-    }
-  });
-  addLog("급여 Raw",s.targetMonth,"신규 "+addedCnt+"+업데이트 "+updatedCnt+"·입퇴사 "+inoutCnt+"·모성보호 "+maternityCnt,"수정");
-  s._importedCount=addedCnt+updatedCnt;s.step=3;render();
-  notify(s.targetMonth+" 적재 완료: "+(addedCnt+updatedCnt)+"건 (입퇴사 "+inoutCnt+"·모성 "+maternityCnt+")","ok");
-}
 
 // ===== 공용 적재 함수 (Raw 행 배열 → 월에 반영) =====
 // rawRows: [[...], [...]] (헤더 제외), mapping: autoMapCols 결과, sourceTag: "GSheet" / "엑셀"
@@ -3684,21 +3447,24 @@ function rebuildRetiredEmployees(){
   var months=Object.keys(MONTHS_DATA).sort(monthCompare);
   months.forEach(function(mk){
     var md=MONTHS_DATA[mk];if(!md||!md.inoutRecords)return;
-    md.inoutRecords.forEach(function(io){
+    md.inoutRecords.forEach(function(io,idx){
       if(io.type!=="퇴사")return;
-      if(!io.date)return;// 퇴사일 없으면 제외
-      // UID 확보: io._uid 우선, 없으면 이름+최초입사일 유추
+      if(!io.date)return;
+      // UID 확보 — 우선순위: io._uid → Raw의 _uid → 이름+퇴사일+월
       var uid=io._uid;
       if(!uid){
         var rr=(md.rawRecords||[]).find(function(r){return r.name===io.name;});
-        uid=rr?rr._uid:generateUid({name:io.name,firstJoin:(rr&&rr.firstJoin)||io.date});
+        if(rr&&rr._uid)uid=rr._uid;
       }
-      if(!uid)return;
-      // 같은 UID의 여러 퇴사 기록 중 가장 최근 것 유지
+      // 여전히 없으면 안전한 폴백 키 생성 (이름+퇴사일+캠퍼스로 고유성 확보)
+      if(!uid){
+        uid="manual_"+io.name+"_"+io.date+"_"+(io.campus||"");
+      }
+      // 원본 Raw에서 추가 정보 보강
+      var rr2=(md.rawRecords||[]).find(function(r){return(uid&&r._uid===uid)||r.name===io.name;});
+      // 같은 UID가 이미 있으면 최신 퇴사일로만 갱신 (이름 다르면 폴백 키가 달라서 충돌 없음)
       var existing=out[uid];
       if(existing&&existing.leaveDate>=io.date)return;
-      // 원본 Raw에서 추가 정보 보강
-      var rr2=(md.rawRecords||[]).find(function(r){return r._uid===uid||r.name===io.name;});
       out[uid]={
         _uid:uid,
         name:io.name,
@@ -3716,6 +3482,7 @@ function rebuildRetiredEmployees(){
     });
   });
   GLOBAL_RETIRED_EMPLOYEES=out;
+  console.log("[퇴사자 재구축] 총 "+Object.keys(out).length+"명 등록됨");
   return out;
 }
 
@@ -3893,15 +3660,8 @@ function syncEmpFromRaw(rec,targetMonth,createTeam){
   }
 }
 
-function downloadTemplate(){
-  ensureXLSX(function(){
-    var hdrs=["캠퍼스","사번","구분","성    명","입사일","퇴사일","직책","","기 본 급","식대","차량보조금","기타수당","주택보조금","인센티브","연장근로수당","연차수당","항공료","자녀교육비","기타정산","지급합계","국민연금","건강보험","장기요양","고용보험","산재보험","AM","기타공제1","기타공제2","퇴사자  연말정산","소득세","지방소득세","공제합계","차인지급액","","연장시간","주민등록번호","최초입사일","국적"];
-    var sample=["광교","-3","정규직","홍길동","2023-03-01","","원장","",5000000,2157000,100000,0,0,0,500000,0,0,0,0,5600000,250000,200000,25000,50000,0,0,0,0,0,400000,40000,965000,4635000,"",40,"800101-1000001","2023-03-01","대한민국"];
-    var wb=XLSX.utils.book_new();var ws=XLSX.utils.aoa_to_sheet([hdrs,sample]);
-    ws["!cols"]=hdrs.map(function(h){return{wch:Math.max(String(h).length*1.5,10)};});
-    XLSX.utils.book_append_sheet(wb,ws,"급여Raw");XLSX.writeFile(wb,"폴리_급여Raw_양식.xlsx");notify("양식 다운로드","ok");
-  });
-}
+// downloadTemplate (xlsx 양식) 제거됨 — Raw 업로드 기능 삭제로 불필요
+// 구글시트를 주 경로로 사용하므로 CSV 양식만 유지
 
 function downloadTemplateCsv(){
   var h="캠퍼스,사번,구분,성명,입사일,퇴사일,직책,기본급,식대,차량보조금,기타수당,연장근로수당,연차수당,항공료,기타정산,지급합계,국민연금,건강보험,장기요양,고용보험,소득세,지방소득세,공제합계,차인지급액,연장시간,국적\n";
@@ -4675,24 +4435,32 @@ function renderOvTurnover(emps,selCp){
   var useAccumulated=retiredFiltered.length>0;
   var basis=useAccumulated?retiredFiltered:outRecs;
   var basisLabel=useAccumulated?"전 기간 누적 "+basis.length+"명":"당월 "+outRecs.length+"건";
-  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #880E4F;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
+  h+='<div style="background:#fff;border:1px solid #e0e0e0;border-top:3px solid #C62828;border-radius:10px;padding:12px 14px;margin-bottom:10px">';
   h+='<div style="font-size:11px;font-weight:800;color:#880E4F;margin-bottom:8px">📋 퇴사 사유별 집계 ('+basisLabel+')</div>';
   if(!basis.length)h+='<div style="font-size:11px;color:#aaa;padding:8px">퇴사자 없음</div>';
   else{
     var reasonMap={};
     basis.forEach(function(r){
-      var reason=(r.reason||r.leaveReason||r.remark||r.memo||"").trim();
-      if(!reason||reason==="GSheet 자동반영"||reason==="엑셀 자동반영")reason="사유 미기재";
+      // 퇴사사유만 참조 (비고·메모는 전혀 섞지 않음)
+      var reason=(r.reason||r.leaveReason||"").trim();
+      if(!reason||reason==="GSheet 자동반영"||reason==="엑셀 자동반영"){
+        reasonMap["사유 미기재"]=(reasonMap["사유 미기재"]||0)+1;
+        return;
+      }
       var cat=reason;
-      if(/자발|개인|이직/.test(reason))cat="자발적 퇴사";
+      // 표준 8개 사유와 정확히 일치하면 그대로 사용
+      if(CONFIG.LEAVE_REASONS.indexOf(reason)>=0){
+        cat=reason;
+      }
+      // 아니면 키워드 기반 분류 (보조적)
+      else if(/자발|이직/.test(reason))cat="자발적 퇴사";
       else if(/계약만료|계약종료/.test(reason))cat="계약만료";
       else if(/권고|해고/.test(reason))cat="권고사직";
       else if(/건강|질병/.test(reason))cat="건강 사유";
       else if(/결혼|출산|육아|가정/.test(reason))cat="가정 사유";
       else if(/학업|유학|대학원/.test(reason))cat="학업";
       else if(/은퇴|정년/.test(reason))cat="은퇴";
-      else if(reason==="사유 미기재")cat="사유 미기재";
-      else if(CONFIG.LEAVE_REASONS.indexOf(reason)<0)cat="기타 ("+reason+")";
+      else cat="기타 ("+reason+")";
       reasonMap[cat]=(reasonMap[cat]||0)+1;
     });
     var reasonArr=Object.keys(reasonMap).map(function(k){return{k:k,v:reasonMap[k]};}).sort(function(a,b){return b.v-a.v;});
@@ -5158,7 +4926,7 @@ function fbClearAll(){
 
 function renderCfgGSheet(){
   var h='<div class="cfg-section-title">☁️ 구글시트 자동 동기화</div>';
-  h+='<div style="font-size:11px;color:#888;margin-bottom:12px">Apps Script 웹앱을 통해 모든 월별 탭을 자동으로 불러옵니다.</div>';
+  h+='<div style="font-size:11px;color:#666;margin-bottom:12px;line-height:1.7">이 앱의 <b>유일한 데이터 소스</b>입니다. 구글시트의 월별 탭(2026-01, 2026-02 등)을 자동으로 읽어옵니다. 일상 동기화는 <b>헤더의 ☁️ 새로고침 버튼</b>을 사용하세요. 이 페이지는 설정 관리와 문제 해결용입니다.</div>';
   h+='<div style="background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:12px 14px;margin-bottom:14px">';
   h+='<div style="font-size:12px;font-weight:800;color:#0D47A1;margin-bottom:8px">🔗 연결 정보</div>';
   h+='<div style="font-size:10px;color:#666;margin-bottom:3px">Apps Script Web App URL</div>';
@@ -5647,7 +5415,6 @@ function render(){
     case"employees":h=renderEmployees();break;
     case"hrcard":h=renderHrCard();break;
     case"personal":h=renderPersonalHistory();break;
-    case"rawupload":h=renderRawUpload();break;
     case"rawdata":h=renderRawData();break;
     case"inout":h=renderInout();break;
     case"draft":h=renderDraft();break;
